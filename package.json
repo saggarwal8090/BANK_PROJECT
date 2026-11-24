@@ -1,0 +1,24 @@
+{
+  "name": "mini-loan-origination-system",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Production-grade Mini Loan Origination System (LOS) with Java 21, Raw JDBC, PostgreSQL/Supabase and Vercel Serverless Architecture",
+  "main": "api/index.js",
+  "scripts": {
+    "build": "echo 'LOS Vercel Build Ready'",
+    "start": "node api/index.js"
+  },
+  "keywords": [
+    "loan-origination-system",
+    "banking",
+    "los",
+    "supabase",
+    "vercel",
+    "serverless"
+  ],
+  "author": "Antigravity Engineering",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

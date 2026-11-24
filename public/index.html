@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini LOS - Loan Origination System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #0f172a;
+            --primary-accent: #2563eb;
+            --primary-hover: #1d4ed8;
+            --success: #059669;
+            --success-bg: #ecfdf5;
+            --warning: #d97706;
+            --warning-bg: #fffbeb;
+            --danger: #dc2626;
+            --danger-bg: #fef2f2;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --border: #e2e8f0;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.5;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 260px;
+            background-color: var(--primary);
+            color: #ffffff;
+            padding: 1.5rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            z-index: 50;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 1.25rem;
+        }
+
+        .brand-logo {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+
+        .brand-title h1 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-title span {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            display: block;
+        }
+
+        .nav-menu {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            list-style: none;
+        }
+
+        .nav-item button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-family: var(--font-sans);
+            font-size: 0.9rem;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .nav-item button:hover {
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+
+        .nav-item button.active {
+            color: #ffffff;
+            background-color: var(--primary-accent);
+        }
+
+        .system-status {
+            margin-top: auto;
+            padding: 1rem;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #10b981;
+            margin-right: 0.5rem;
+        }
+
+        /* Main Content Container */
+        .main-content {
+            margin-left: 260px;
+            flex: 1;
+            padding: 2rem;
+            max-width: 1300px;
+        }
+
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .header-bar h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .badge-business-date {
+            background-color: #e0e7ff;
+            color: #3730a3;
+            padding: 0.4rem 0.8rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        /* Views */
+        .view-section {
+            display: none;
+        }
+
+        .view-section.active {
+            display: block;
+        }
+
+        /* Cards & Metrics */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.25rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .metric-title {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: 0.35rem;
+            font-family: var(--font-mono);
+        }
+
+        /* Form Styles */
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            color: var(--primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .form-group input, .form-group select, .form-group textarea {
+            padding: 0.65rem 0.85rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-family: var(--font-sans);
+            font-size: 0.9rem;
+            background-color: #fff;
+            transition: border-color 0.15s ease;
+        }
+
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary-accent);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.65rem 1.25rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            font-family: var(--font-sans);
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-success {
+            background-color: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background-color: var(--danger);
+            color: white;
+        }
+
+        .btn-outline {
+            background-color: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            background-color: #f1f5f9;
+        }
+
+        /* Tables */
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f8fafc;
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 0.75rem 1rem;
+            border-bottom: 2px solid var(--border);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-main);
+        }
+
+        tr:hover td {
+            background-color: #f8fafc;
+        }
+
+        /* Status Pills */
+        .status-pill {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .status-DRAFT { background-color: #f1f5f9; color: #475569; }
+        .status-UNDER_REVIEW { background-color: var(--warning-bg); color: var(--warning); }
+        .status-CREDIT_APPROVAL { background-color: #eff6ff; color: #2563eb; }
+        .status-DISBURSED { background-color: var(--success-bg); color: var(--success); }
+        .status-REJECTED { background-color: var(--danger-bg); color: var(--danger); }
+        .status-EXIT { background-color: #f3e8ff; color: #7e22ce; }
+
+        /* Notification & Alerts */
+        .alert-box {
+            padding: 1rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            display: none;
+        }
+
+        .alert-box.success {
+            background-color: var(--success-bg);
+            color: var(--success);
+            border: 1px solid #a7f3d0;
+            display: block;
+        }
+
+        .alert-box.error {
+            background-color: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid #fecaca;
+            display: block;
+        }
+
+        /* Live EMI Preview Box */
+        .calc-preview {
+            background-color: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            display: flex;
+            gap: 2rem;
+        }
+
+        .calc-item span {
+            display: block;
+            font-size: 0.75rem;
+            color: #15803d;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .calc-item strong {
+            font-size: 1.2rem;
+            color: #166534;
+            font-family: var(--font-mono);
+        }
+
+        /* Console Log View */
+        .log-box {
+            background-color: var(--primary);
+            color: #f8fafc;
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            padding: 1rem;
+            border-radius: 8px;
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .empty-state { text-align:center; padding:2.5rem 1rem; }
+        .empty-state .icon { font-size:2.2rem; margin-bottom:0.5rem; }
+        .empty-state .title { font-weight:600; color:var(--text-primary); margin-bottom:0.25rem; }
+        .empty-state .sub { color:var(--text-muted); font-size:0.85rem; }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="brand">
+            <div class="brand-logo">₹</div>
+            <div class="brand-title">
+                <h1>Mini LOS</h1>
+                <span>Enterprise Core v1.0</span>
+            </div>
+        </div>
+
+        <ul class="nav-menu">
+            <li class="nav-item"><button class="active" onclick="switchView('dashboard')">📊 Dashboard</button></li>
+            <li class="nav-item"><button onclick="switchView('customers')">👤 Customers</button></li>
+            <li class="nav-item"><button onclick="switchView('applications')">📑 Loan Origination</button></li>
+            <li class="nav-item"><button onclick="switchView('reports')">📈 Enterprise Reports</button></li>
+            <li class="nav-item"><button onclick="switchView('utilities')">⚙️ Background Jobs</button></li>
+        </ul>
+
+        <div class="system-status">
+            <div><span class="status-dot" id="dbStatusDot" style="background-color: #10b981;"></span><span id="dbStatusText">Supabase PostgreSQL (Connected)</span></div>
+            <div style="margin-top: 0.4rem; color: #94a3b8;" id="envBadge">Vercel Serverless / Production</div>
+            <div style="margin-top: 0.4rem; font-size: 0.72rem; color: #38bdf8; word-break: break-all;" id="supabaseBadge">Supabase: ciemfotaaupazeqxxuev (Live)</div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="main-content">
+
+        <!-- Global Header -->
+        <header class="header-bar">
+            <div>
+                <h2 id="viewHeading">Dashboard Overview</h2>
+                <p style="color: var(--text-muted); font-size: 0.9rem;">Mini Loan Origination System - Supabase & PostgreSQL</p>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <!-- Dynamic RBAC Role Switcher -->
+                <div style="display: flex; align-items: center; gap: 0.5rem; background: #fff; padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 8px;">
+                    <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Active Role:</span>
+                    <select id="activeRoleSelect" onchange="onRoleChanged()" style="font-family: var(--font-sans); font-size: 0.85rem; font-weight: 600; border: none; outline: none; background: transparent; cursor: pointer; color: var(--primary-accent);">
+                        <option value="LOAN_OFFICER" data-user="officer_ramesh">LOAN_OFFICER (Ramesh)</option>
+                        <option value="CREDIT_OFFICER" data-user="credit_priya">CREDIT_OFFICER (Priya)</option>
+                        <option value="DISBURSEMENT_OFFICER" data-user="treasury_amit">DISBURSEMENT_OFFICER (Amit)</option>
+                        <option value="AUDITOR" data-user="auditor_neha">AUDITOR (Neha - Read Only)</option>
+                        <option value="ADMIN" data-user="admin_super" selected>ADMIN (Super User)</option>
+                    </select>
+                </div>
+                <span class="badge-business-date" id="businessDateBadge">Business Date: 2026-11-24</span>
+            </div>
+        </header>
+
+        <div id="globalAlert" class="alert-box"></div>
+
+        <!-- VIEW 1: DASHBOARD -->
+        <section id="view-dashboard" class="view-section active">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-title">Total Applications</div>
+                    <div class="metric-value" id="kpiTotalApps">0</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Total Requested Volume</div>
+                    <div class="metric-value" id="kpiTotalVolume">INR 0.00</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Under Review (Active)</div>
+                    <div class="metric-value" id="kpiUnderReview">0</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Disbursed & Completed</div>
+                    <div class="metric-value" id="kpiDisbursed">0</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Recent Loan Applications</div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>App Number</th>
+                                <th>Customer</th>
+                                <th>Product</th>
+                                <th>Amount</th>
+                                <th>Proposed EMI</th>
+                                <th>Status</th>
+                                <th>Eligible</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dashboardRecentTable">
+                            <tr><td colspan="8" style="text-align:center;padding:2.5rem 1rem;">
+                                <div style="font-size:2rem;margin-bottom:0.5rem;">📋</div>
+                                <div style="font-weight:600;color:var(--text-primary);">No Applications Yet</div>
+                                <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">Start the Java server and create your first loan application in the <strong>Loan Origination</strong> tab.</div>
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW 2: CUSTOMERS -->
+        <section id="view-customers" class="view-section">
+            <div class="card">
+                <div class="card-title">Register New Customer</div>
+                <form id="customerForm" onsubmit="handleCustomerSubmit(event)">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Full Name *</label>
+                            <input type="text" id="custName" required placeholder="e.g. Ramesh Kumar">
+                        </div>
+                        <div class="form-group">
+                            <label>Mobile Number (10 Digits) *</label>
+                            <input type="tel" id="custMobile" pattern="^[0-9]{10}$" required placeholder="9876543210">
+                        </div>
+                        <div class="form-group">
+                            <label>Date of Birth *</label>
+                            <input type="date" id="custDob" required>
+                        </div>
+                        <div class="form-group">
+                            <label>KYC ID / Aadhaar / PAN *</label>
+                            <input type="text" id="custKyc" required placeholder="PAN: ABCDE1234F">
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label>Residential Address *</label>
+                            <input type="text" id="custAddress" required placeholder="Street, City, State, PIN">
+                        </div>
+                    </div>
+                    <div style="margin-top: 1.25rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                        <button type="submit" class="btn btn-primary" id="btnCreateCustomer">Create Customer (CUST-XXXXXX)</button>
+                        <button type="button" class="btn btn-outline" onclick="fillSampleCustomer()">⚡ Quick Fill Sample</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Registered Customer Directory</div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Customer ID</th>
+                                <th>Name</th>
+                                <th>Mobile</th>
+                                <th>DOB</th>
+                                <th>Address</th>
+                                <th>KYC</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customerTableBody">
+                            <tr><td colspan="6" style="text-align:center;padding:2.5rem 1rem;">
+                                <div style="font-size:2rem;margin-bottom:0.5rem;">👤</div>
+                                <div style="font-weight:600;color:var(--text-primary);">No Customers Registered</div>
+                                <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">Use the form above to register your first customer.</div>
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW 3: LOAN ORIGINATION -->
+        <section id="view-applications" class="view-section">
+            <div class="card">
+                <div class="card-title">Create Loan Application (Draft)</div>
+                <form id="appForm" onsubmit="handleAppDraftSubmit(event)">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Select Customer *</label>
+                            <select id="appCustomerId" required>
+                                <option value="">-- Choose Customer --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Loan Product *</label>
+                            <select id="appProduct" required onchange="calculateLiveEmi()">
+                                <option value="PERSONAL">PERSONAL (12% p.a. | Max 5 Lakh | 12-60m)</option>
+                                <option value="EDUCATION">EDUCATION (10% p.a. | Max 10 Lakh | 12-84m)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Requested Amount (INR) *</label>
+                            <input type="number" id="appAmount" required min="50000" step="1000" value="100000" oninput="calculateLiveEmi()">
+                        </div>
+                        <div class="form-group">
+                            <label>Tenure (Months) *</label>
+                            <input type="number" id="appTenure" required min="12" max="84" value="12" oninput="calculateLiveEmi()">
+                        </div>
+                        <div class="form-group">
+                            <label>Monthly Net Income (INR) *</label>
+                            <input type="number" id="appIncome" required min="15000" step="500" value="50000" oninput="calculateLiveEmi()">
+                        </div>
+                        <div class="form-group">
+                            <label>Existing Monthly Obligations (INR)</label>
+                            <input type="number" id="appObligations" min="0" step="500" value="0" oninput="calculateLiveEmi()">
+                        </div>
+                        <div class="form-group">
+                            <label>Branch Code *</label>
+                            <input type="text" id="appBranchCode" required value="BR001">
+                        </div>
+                        <div class="form-group">
+                            <label>Branch Name *</label>
+                            <input type="text" id="appBranchName" required value="Main Branch Mumbai">
+                        </div>
+                    </div>
+
+                    <!-- Live EMI & FOIR Calculation Preview -->
+                    <div class="calc-preview">
+                        <div class="calc-item">
+                            <span>Proposed EMI</span>
+                            <strong id="liveEmiText">INR 8,884.88</strong>
+                        </div>
+                        <div class="calc-item">
+                            <span>Calculated FOIR</span>
+                            <strong id="liveFoirText">17.77%</strong>
+                        </div>
+                        <div class="calc-item">
+                            <span>Policy Limit</span>
+                            <strong>FOIR &le; 50.00%</strong>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 1.25rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                        <button type="submit" class="btn btn-primary">Save Application Draft</button>
+                        <button type="button" class="btn btn-outline" onclick="fillSampleLoan()">⚡ Quick Fill Sample Loan</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Application Pipeline & Lifecycle Actions</div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>App #</th>
+                                <th>Customer</th>
+                                <th>Product</th>
+                                <th>Amount</th>
+                                <th>EMI</th>
+                                <th>FOIR</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="applicationPipelineTable">
+                            <tr><td colspan="8" style="text-align:center;padding:2.5rem 1rem;">
+                                <div style="font-size:2rem;margin-bottom:0.5rem;">🏦</div>
+                                <div style="font-weight:600;color:var(--text-primary);">Pipeline is Empty</div>
+                                <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">No loan applications in the system yet.</div>
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW 4: ENTERPRISE REPORTS -->
+        <section id="view-reports" class="view-section">
+            <div class="card">
+                <div class="card-title">
+                    <span>Parameterized Reports</span>
+                    <div>
+                        <button class="btn btn-outline" onclick="loadReport('register')">Application Register</button>
+                        <button class="btn btn-outline" onclick="loadReport('pipeline')">Pipeline Breakdown</button>
+                        <button class="btn btn-outline" onclick="loadReport('disbursements')">Disbursements</button>
+                        <button class="btn btn-outline" onclick="loadReport('overdue')">Overdue Reviews</button>
+                        <button class="btn btn-outline" onclick="loadReport('no-disbursement')">Unconverted</button>
+                        <button class="btn btn-outline" onclick="loadReport('repeat')">Repeat Applicants</button>
+                    </div>
+                </div>
+
+                <div id="reportContainer">
+                    <p style="color: var(--text-muted);">Select a report above to run parameterized JDBC aggregation.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW 5: BACKGROUND UTILITIES -->
+        <section id="view-utilities" class="view-section">
+            <div class="card">
+                <div class="card-title">Background Execution Pipelines</div>
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+                    Mini LOS runs two parallel background pipelines via <code>ScheduledExecutorService</code> locally,
+                    and supports automated execution via Vercel Cron at <code>/api/utilities/run</code>.
+                </p>
+
+                <div style="display: flex; gap: 1rem; margin-bottom: 2rem;">
+                    <button class="btn btn-success" onclick="runUtilitiesNow()">▶️ Trigger All Background Jobs Now</button>
+                    <a href="/api/utilities/csv" target="_blank" class="btn btn-outline">📥 Download Overdue Reviews CSV</a>
+                </div>
+
+                <h4 style="margin-bottom: 0.75rem;">Execution Logs</h4>
+                <div class="log-box" id="utilLogBox">System initialized. Click 'Trigger All Background Jobs Now' to run pipelines immediately.</div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Review Modal Dialog -->
+    <div id="reviewModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+        <div style="background:white; border-radius:10px; padding:2rem; width:450px; max-width:90vw;">
+            <h3 style="margin-bottom:1rem;">Credit Officer Decision</h3>
+            <p id="reviewModalDetails" style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.25rem;"></p>
+            <input type="hidden" id="modalAppId">
+            <div class="form-group" style="margin-bottom:1rem;">
+                <label>Reviewer Code</label>
+                <input type="text" id="modalReviewerCode" value="CR-OFFICER-01">
+            </div>
+            <div class="form-group" style="margin-bottom:1.5rem;">
+                <label>Decision Reason / Remarks (Mandatory if Rejecting)</label>
+                <textarea id="modalReason" rows="3" placeholder="Enter justification..."></textarea>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                <button class="btn btn-outline" onclick="closeReviewModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="submitReview(false)">Reject</button>
+                <button class="btn btn-success" onclick="submitReview(true)">Approve Loan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        let cachedCustomers = [];
+        let cachedApplications = [];
+        let currentRole = 'ADMIN';
+        let currentUsername = 'admin_super';
+
+        function getAuthHeaders(extra = {}) {
+            return {
+                'Content-Type': 'application/json',
+                'X-User-Role': currentRole,
+                'X-User-Name': currentUsername,
+                ...extra
+            };
+        }
+
+        function getApiHost() {
+            if (window.location.protocol === 'file:') {
+                return 'http://localhost:3000';
+            }
+            return '';
+        }
+
+        function onRoleChanged() {
+            const sel = document.getElementById('activeRoleSelect');
+            currentRole = sel.value;
+            const opt = sel.options[sel.selectedIndex];
+            currentUsername = opt.getAttribute('data-user') || currentRole.toLowerCase();
+            showAlert(`Switched active security context to: ${currentRole} (${currentUsername})`, true);
+            renderPipelineTable(cachedApplications);
+            updateRoleUI();
+        }
+
+        function updateRoleUI() {
+            const custBtn = document.querySelector('#customerForm button[type="submit"]');
+            if (custBtn) {
+                custBtn.disabled = !(currentRole === 'LOAN_OFFICER' || currentRole === 'ADMIN');
+                custBtn.title = custBtn.disabled ? 'Requires LOAN_OFFICER or ADMIN role' : '';
+            }
+
+            const appBtn = document.querySelector('#appForm button[type="submit"]');
+            if (appBtn) {
+                appBtn.disabled = !(currentRole === 'LOAN_OFFICER' || currentRole === 'ADMIN');
+                appBtn.title = appBtn.disabled ? 'Requires LOAN_OFFICER or ADMIN role' : '';
+            }
+
+            const utilBtn = document.querySelector('#view-utilities button.btn-success');
+            if (utilBtn) {
+                utilBtn.disabled = !(currentRole === 'ADMIN');
+                utilBtn.title = utilBtn.disabled ? 'Requires ADMIN role' : '';
+            }
+        }
+
+        function fillSampleCustomer() {
+            const randomMobile = '98' + Math.floor(10000000 + Math.random() * 90000000);
+            const randomPan = 'ABCPA' + Math.floor(1000 + Math.random() * 9000) + 'X';
+            const samples = [
+                { name: 'Arun Kumar', dob: '1992-05-14', address: 'Flat 402, Green Glen Layout, Bellandur, Bengaluru - 560103' },
+                { name: 'Ananya Roy', dob: '1996-09-22', address: '14/B South City II, Sector 49, Gurugram - 122018' },
+                { name: 'Vikram Malhotra', dob: '1987-12-03', address: 'Plot 78, Jubilee Hills, Hyderabad - 500033' },
+                { name: 'Pooja Hegde', dob: '1994-08-19', address: '88, Marine Drive, Mumbai - 400020' },
+                { name: 'Siddharth Sen', dob: '1991-03-11', address: '22, Salt Lake Sector V, Kolkata - 700091' }
+            ];
+            const s = samples[Math.floor(Math.random() * samples.length)];
+            document.getElementById('custName').value = s.name;
+            document.getElementById('custMobile').value = randomMobile;
+            document.getElementById('custDob').value = s.dob;
+            document.getElementById('custKyc').value = 'PAN: ' + randomPan;
+            document.getElementById('custAddress').value = s.address;
+            showAlert('⚡ Sample customer details filled! Click "Create Customer" to save to database.', true);
+        }
+
+        function fillSampleLoan() {
+            if (cachedCustomers.length > 0) {
+                document.getElementById('appCustomerId').value = cachedCustomers[0].customerId;
+            }
+            document.getElementById('appProduct').value = 'PERSONAL';
+            document.getElementById('appAmount').value = 350000;
+            document.getElementById('appTenure').value = 36;
+            document.getElementById('appIncome').value = 65000;
+            document.getElementById('appObligations').value = 5000;
+            document.getElementById('appBranchCode').value = 'MUM001';
+            document.getElementById('appBranchName').value = 'Nariman Point, Mumbai';
+            calculateLiveEmi();
+            showAlert('⚡ Sample loan details populated! Click "Save Application Draft" to save to database.', true);
+        }
+
+        async function init() {
+            onRoleChanged();
+            calculateLiveEmi();
+            await checkHealth();
+            await Promise.all([loadCustomers(), loadApplications()]);
+        }
+
+        async function checkHealth() {
+            try {
+                const apiHost = getApiHost();
+                const res = await fetch(apiHost + '/api/health');
+                if (!res.ok) throw new Error('API status ' + res.status);
+                const data = await res.json();
+
+                document.getElementById('dbStatusDot').style.backgroundColor = '#10b981';
+                document.getElementById('dbStatusText').textContent = 'Supabase Connected';
+                if (data.businessDate) {
+                    document.getElementById('businessDateBadge').textContent = 'Business Date: ' + data.businessDate;
+                }
+                if (data.supabase && data.supabase.projectRef) {
+                    document.getElementById('supabaseBadge').textContent = 'Supabase: ' + data.supabase.projectRef + ' (Live)';
+                }
+            } catch (e) {
+                document.getElementById('dbStatusDot').style.backgroundColor = '#ef4444';
+                document.getElementById('dbStatusText').textContent = 'API Connection Error';
+                showAlert('⚠️ Cannot reach Mini LOS API server. If testing locally, ensure backend is running at ' + (getApiHost() || window.location.origin), false);
+            }
+        }
+
+        function switchView(viewName) {
+            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item button').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('view-' + viewName).classList.add('active');
+            if (window.event && window.event.target) {
+                const btn = window.event.target.closest('button');
+                if (btn) btn.classList.add('active');
+            }
+
+            const headings = {
+                dashboard: 'Dashboard Overview',
+                customers: 'Customer Onboarding',
+                applications: 'Loan Origination Lifecycle',
+                reports: 'Enterprise Parameterized Reports',
+                utilities: 'Background Jobs & Cron Pipelines'
+            };
+            document.getElementById('viewHeading').textContent = headings[viewName] || 'Overview';
+
+            if (viewName === 'reports') {
+                loadReport('register');
+            }
+        }
+
+        function showAlert(msg, isSuccess = true) {
+            const el = document.getElementById('globalAlert');
+            if (!el) return;
+            el.className = 'alert-box ' + (isSuccess ? 'success' : 'error');
+            el.textContent = msg;
+            el.style.display = 'block';
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            clearTimeout(el._hideTimer);
+            el._hideTimer = setTimeout(() => {
+                el.style.display = 'none';
+                el.className = 'alert-box';
+            }, isSuccess ? 5000 : 8000);
+        }
+
+        function calculateLiveEmi() {
+            const amount = parseFloat(document.getElementById('appAmount').value) || 0;
+            const tenure = parseInt(document.getElementById('appTenure').value) || 1;
+            const product = document.getElementById('appProduct').value;
+            const income = parseFloat(document.getElementById('appIncome').value) || 1;
+            const obligations = parseFloat(document.getElementById('appObligations').value) || 0;
+
+            const rate = (product === 'PERSONAL') ? 12.00 : 10.00;
+            const r = rate / 1200;
+            const onePlusR = Math.pow(1 + r, tenure);
+            const emi = (amount * r * onePlusR) / (onePlusR - 1);
+
+            const roundedEmi = isNaN(emi) ? 0 : emi;
+            const foir = ((obligations + roundedEmi) / income) * 100;
+
+            document.getElementById('liveEmiText').textContent = 'INR ' + formatIndianNumber(roundedEmi.toFixed(2));
+            document.getElementById('liveFoirText').textContent = (isNaN(foir) ? 0 : foir).toFixed(2) + '%';
+        }
+
+        function formatIndianNumber(x) {
+            if (x === undefined || x === null) return '0.00';
+            const parts = x.toString().split('.');
+            let integerPart = parts[0];
+            const decimalPart = parts.length > 1 ? '.' + parts[1] : '.00';
+            let lastThree = integerPart.substring(integerPart.length - 3);
+            let otherNumbers = integerPart.substring(0, integerPart.length - 3);
+            if (otherNumbers !== '') {
+                lastThree = ',' + lastThree;
+            }
+            return otherNumbers.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + lastThree + decimalPart;
+        }
+
+        function renderCustomerTable(customers) {
+            const tbody = document.getElementById('customerTableBody');
+            if (!customers || customers.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2.5rem 1rem;">
+                    <div style="font-size:2rem;margin-bottom:0.5rem;">👤</div>
+                    <div style="font-weight:600;color:var(--text-primary);">No Customers Registered</div>
+                    <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">Use the form above to register a customer.</div>
+                </td></tr>`;
+            } else {
+                tbody.innerHTML = customers.map(c => `
+                    <tr>
+                        <td><strong>${c.customerId}</strong></td>
+                        <td>${c.name}</td>
+                        <td>${c.mobile}</td>
+                        <td>${c.dateOfBirth}</td>
+                        <td>${c.address}</td>
+                        <td>${c.kycDetails}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        function populateCustomerDropdown(customers) {
+            const sel = document.getElementById('appCustomerId');
+            const prevVal = sel.value;
+            sel.innerHTML = '<option value="">-- Choose Customer --</option>' +
+                (customers || []).map(c => `<option value="${c.customerId}">${c.customerId} - ${c.name} (${c.mobile})</option>`).join('');
+            if (prevVal) sel.value = prevVal;
+        }
+
+        async function loadCustomers() {
+            try {
+                const res = await fetch(getApiHost() + '/api/customers', {
+                    headers: getAuthHeaders()
+                });
+                if (res.ok) {
+                    cachedCustomers = await res.json();
+                } else {
+                    const err = await res.json();
+                    showAlert('Failed to load customers: ' + (err.error || res.statusText), false);
+                }
+            } catch (e) {
+                console.error('loadCustomers error:', e);
+            }
+            renderCustomerTable(cachedCustomers);
+            populateCustomerDropdown(cachedCustomers);
+        }
+
+        async function handleCustomerSubmit(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnCreateCustomer') || document.querySelector('#customerForm button[type="submit"]');
+            const origText = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+            const payload = {
+                name: document.getElementById('custName').value.trim(),
+                mobile: document.getElementById('custMobile').value.trim(),
+                dateOfBirth: document.getElementById('custDob').value,
+                kycDetails: document.getElementById('custKyc').value.trim(),
+                address: document.getElementById('custAddress').value.trim()
+            };
+
+            if (!payload.name || !payload.mobile || !payload.dateOfBirth || !payload.kycDetails || !payload.address) {
+                showAlert('❌ All fields are required.', false);
+                if (btn) { btn.disabled = false; btn.textContent = origText; }
+                return;
+            }
+            if (!/^[0-9]{10}$/.test(payload.mobile)) {
+                showAlert('❌ Mobile number must be exactly 10 digits.', false);
+                if (btn) { btn.disabled = false; btn.textContent = origText; }
+                return;
+            }
+
+            try {
+                const res = await fetch(getApiHost() + '/api/customers', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Server rejected request');
+                showAlert('✅ Customer registered successfully! Assigned ID: ' + data.customerId, true);
+                document.getElementById('customerForm').reset();
+                await loadCustomers();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = origText; }
+            }
+        }
+
+        async function loadApplications() {
+            const dashTbody = document.getElementById('dashboardRecentTable');
+            const pipeTbody = document.getElementById('applicationPipelineTable');
+            const spinner = `<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-muted);">
+                <div style="display:inline-block;width:1.2rem;height:1.2rem;border:2px solid var(--border);border-top-color:var(--primary-accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:0.5rem;"></div>
+                Fetching from Supabase PostgreSQL…
+            </td></tr>`;
+            if (cachedApplications.length === 0) {
+                dashTbody.innerHTML = spinner;
+                pipeTbody.innerHTML = spinner;
+            }
+
+            try {
+                const res = await fetch(getApiHost() + '/api/applications', {
+                    headers: getAuthHeaders()
+                });
+                if (res.ok) {
+                    cachedApplications = await res.json();
+                } else {
+                    const err = await res.json();
+                    showAlert('Failed to load applications: ' + (err.error || res.statusText), false);
+                }
+            } catch (e) {
+                console.error('loadApplications error:', e);
+            }
+            updateKPIs(cachedApplications);
+            renderDashboardRecent(cachedApplications);
+            renderPipelineTable(cachedApplications);
+        }
+
+        function updateKPIs(apps) {
+            document.getElementById('kpiTotalApps').textContent = apps.length;
+            let totalVal = 0;
+            let underReviewCount = 0;
+            let disbursedCount = 0;
+
+            apps.forEach(a => {
+                totalVal += parseFloat(a.requestedAmount || 0);
+                if (a.status === 'UNDER_REVIEW') underReviewCount++;
+                if (a.status === 'DISBURSED' || a.status === 'EXIT') disbursedCount++;
+            });
+
+            document.getElementById('kpiTotalVolume').textContent = 'INR ' + formatIndianNumber(totalVal.toFixed(2));
+            document.getElementById('kpiUnderReview').textContent = underReviewCount;
+            document.getElementById('kpiDisbursed').textContent = disbursedCount;
+        }
+
+        function renderDashboardRecent(apps) {
+            const tbody = document.getElementById('dashboardRecentTable');
+            if (!apps || apps.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2.5rem 1rem;">
+                    <div style="font-size:2rem;margin-bottom:0.5rem;">📋</div>
+                    <div style="font-weight:600;color:var(--text-primary);">No Applications Yet</div>
+                    <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">Create your first loan application in the <strong>Loan Origination</strong> tab.</div>
+                </td></tr>`;
+                return;
+            }
+            tbody.innerHTML = apps.slice(0, 5).map(a => `
+                <tr>
+                    <td><strong>${a.applicationNumber}</strong></td>
+                    <td>${a.customerName || a.customerId}</td>
+                    <td>${a.product}</td>
+                    <td>INR ${formatIndianNumber(parseFloat(a.requestedAmount).toFixed(2))}</td>
+                    <td>INR ${formatIndianNumber(parseFloat(a.proposedEmi).toFixed(2))}</td>
+                    <td><span class="status-pill status-${a.status}">${a.status}</span></td>
+                    <td>${a.eligible ? '✅ Yes' : '❌ No'}</td>
+                    <td><button class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="viewAppHistory(${a.applicationId})">Audit Log</button></td>
+                </tr>
+            `).join('');
+        }
+
+        function renderPipelineTable(apps) {
+            const tbody = document.getElementById('applicationPipelineTable');
+            if (!apps || apps.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2.5rem 1rem;">
+                    <div style="font-size:2rem;margin-bottom:0.5rem;">🏦</div>
+                    <div style="font-weight:600;color:var(--text-primary);">Pipeline is Empty</div>
+                    <div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.25rem;">No loan applications in the system yet.</div>
+                </td></tr>`;
+                return;
+            }
+            tbody.innerHTML = apps.map(a => {
+                let actionBtns = '';
+                const canSubmit = currentRole === 'LOAN_OFFICER' || currentRole === 'ADMIN';
+                const canReview = currentRole === 'CREDIT_OFFICER' || currentRole === 'ADMIN';
+                const canDisburse = currentRole === 'DISBURSEMENT_OFFICER' || currentRole === 'ADMIN';
+
+                if (a.status === 'DRAFT') {
+                    if (canSubmit) {
+                        actionBtns = `<button class="btn btn-primary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="submitApp(${a.applicationId})">Submit</button>`;
+                    } else {
+                        actionBtns = `<span style="color:var(--text-muted); font-size:0.78rem;">Submit (Requires LOAN_OFFICER)</span>`;
+                    }
+                } else if (a.status === 'UNDER_REVIEW') {
+                    if (canReview) {
+                        actionBtns = `<button class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="openReviewModal(${a.applicationId}, '${a.applicationNumber}', ${a.requestedAmount})">Review</button>`;
+                    } else {
+                        actionBtns = `<span style="color:var(--text-muted); font-size:0.78rem;">Review (Requires CREDIT_OFFICER)</span>`;
+                    }
+                } else if (a.status === 'CREDIT_APPROVAL') {
+                    if (canDisburse) {
+                        actionBtns = `<button class="btn btn-success" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="disburseApp(${a.applicationId})">Disburse</button>`;
+                    } else {
+                        actionBtns = `<span style="color:var(--text-muted); font-size:0.78rem;">Disburse (Requires DISBURSEMENT_OFFICER)</span>`;
+                    }
+                } else {
+                    actionBtns = `<span style="color:var(--text-muted); font-size:0.8rem;">Terminal / Processed</span>`;
+                }
+
+                return `
+                    <tr>
+                        <td><strong>${a.applicationNumber}</strong></td>
+                        <td>${a.customerName || a.customerId}</td>
+                        <td>${a.product}</td>
+                        <td>INR ${formatIndianNumber(parseFloat(a.requestedAmount).toFixed(2))}</td>
+                        <td>INR ${formatIndianNumber(parseFloat(a.proposedEmi).toFixed(2))}</td>
+                        <td>${a.foirPercentage || a.foir}%</td>
+                        <td><span class="status-pill status-${a.status}">${a.status}</span></td>
+                        <td>${actionBtns}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function handleAppDraftSubmit(e) {
+            e.preventDefault();
+            const btn = document.querySelector('#appForm button[type="submit"]');
+            const origText = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+            const payload = {
+                customerId: document.getElementById('appCustomerId').value,
+                product: document.getElementById('appProduct').value,
+                requestedAmount: document.getElementById('appAmount').value,
+                tenureMonths: document.getElementById('appTenure').value,
+                monthlyIncome: document.getElementById('appIncome').value,
+                existingMonthlyObligations: document.getElementById('appObligations').value,
+                branchCode: document.getElementById('appBranchCode').value,
+                branchName: document.getElementById('appBranchName').value
+            };
+
+            if (!payload.customerId) {
+                showAlert('❌ Please select a customer first.', false);
+                if (btn) { btn.disabled = false; btn.textContent = origText; }
+                return;
+            }
+
+            try {
+                const res = await fetch(getApiHost() + '/api/applications', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to create application draft');
+                showAlert('✅ Application draft created successfully! App Number: ' + data.applicationNumber, true);
+                document.getElementById('appForm').reset();
+                calculateLiveEmi();
+                await loadApplications();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = origText; }
+            }
+        }
+
+        async function submitApp(appId) {
+            try {
+                const res = await fetch(getApiHost() + `/api/applications/${appId}/submit`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ performedBy: currentUsername })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Submission failed');
+
+                showAlert(`Application evaluated! Status: ${data.status}. Reason: ${data.eligibilityReasons || 'Passed criteria'}`, data.eligible);
+                await loadApplications();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            }
+        }
+
+        function openReviewModal(appId, appNumber, amount) {
+            document.getElementById('modalAppId').value = appId;
+            document.getElementById('reviewModalDetails').textContent = `Deciding on Application ${appNumber} (Approved Amount: INR ${formatIndianNumber(parseFloat(amount).toFixed(2))})`;
+            document.getElementById('modalReason').value = '';
+            document.getElementById('reviewModal').style.display = 'flex';
+        }
+
+        function closeReviewModal() {
+            document.getElementById('reviewModal').style.display = 'none';
+        }
+
+        async function submitReview(approve) {
+            const appId = document.getElementById('modalAppId').value;
+            const reviewerCode = document.getElementById('modalReviewerCode').value;
+            const decisionReason = document.getElementById('modalReason').value;
+
+            try {
+                const res = await fetch(getApiHost() + `/api/applications/${appId}/review`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        approve: approve,
+                        reviewerCode: reviewerCode || currentUsername,
+                        decisionReason: decisionReason,
+                        performedBy: currentUsername
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Review decision failed');
+
+                closeReviewModal();
+                showAlert(`Credit Review recorded! Application status: ${data.status}`, approve);
+                await loadApplications();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            }
+        }
+
+        async function disburseApp(appId) {
+            if (!confirm('Confirm disbursement for this approved loan application?')) return;
+            try {
+                const res = await fetch(getApiHost() + `/api/applications/${appId}/disburse`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ performedBy: currentUsername })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Disbursement failed');
+
+                showAlert(`Disbursement completed! Reference: ${data.reference} for amount INR ${formatIndianNumber(parseFloat(data.amount).toFixed(2))}`, true);
+                await loadApplications();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            }
+        }
+
+        async function viewAppHistory(appId) {
+            try {
+                const res = await fetch(getApiHost() + `/api/applications/${appId}/history`, {
+                    headers: getAuthHeaders()
+                });
+                const history = await res.json();
+                if (!res.ok) throw new Error(history.error || 'Failed to load history');
+                const log = history.map(h => `[${h.performedAt}] ${h.action} | Old: ${h.oldStatus || 'NONE'} -> New: ${h.newStatus} | Performer: ${h.performedBy} | Note: ${h.remarks}`).join('\n');
+                alert("Audit Trail for App #" + appId + ":\n\n" + (log || 'No history entries.'));
+            } catch (e) {
+                alert("Failed to load audit history: " + (e.message || e));
+            }
+        }
+
+        function renderReportData(type, data) {
+            const container = document.getElementById('reportContainer');
+            if (type === 'register') {
+                container.innerHTML = `
+                    <h4>Application Register</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>App #</th><th>Customer</th><th>Product</th><th>Amount</th><th>EMI</th><th>Status</th><th>Submitted</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="7">No records found.</td></tr>' : data.map(r => `<tr><td><strong>${r.applicationNumber}</strong></td><td>${r.customerName}</td><td>${r.product}</td><td>${r.formattedRequestedAmount}</td><td>${r.formattedProposedEmi}</td><td><span class="status-pill status-${r.status}">${r.status}</span></td><td>${r.submittedAt || '-'}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            } else if (type === 'pipeline') {
+                container.innerHTML = `
+                    <h4>Product & Status Pipeline</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>Product</th><th>Status</th><th>Total Count</th><th>Total Requested Volume</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">No pipeline data.</td></tr>' : data.map(r => `<tr><td>${r.key1}</td><td><span class="status-pill status-${r.key2}">${r.key2}</span></td><td>${r.totalApplications}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            } else if (type === 'disbursements') {
+                container.innerHTML = `
+                    <h4>Disbursement Summary</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>Disbursement Date</th><th>Count</th><th>Total Disbursed Volume</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="3">No disbursements recorded yet.</td></tr>' : data.map(r => `<tr><td>${r.periodOrBranch}</td><td>${r.totalDisbursements}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            } else if (type === 'overdue') {
+                container.innerHTML = `
+                    <h4>Overdue Reviews (> 2 Days Waiting)</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>App #</th><th>Customer</th><th>Product</th><th>Amount</th><th>Submitted</th><th>Days Waiting</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="6">No applications overdue.</td></tr>' : data.map(r => `<tr><td><strong>${r.applicationNumber}</strong></td><td>${r.customerName}</td><td>${r.product}</td><td>${r.formattedAmount}</td><td>${r.submittedAt}</td><td><strong style="color:var(--danger)">${r.daysWaiting} days</strong></td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            } else if (type === 'no-disbursement') {
+                container.innerHTML = `
+                    <h4>Customers Without Disbursement (0 Payouts)</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>Customer ID</th><th>Name</th><th>Mobile</th><th>Total Applications</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">All customers have received disbursements.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName}</td><td>${r.mobile}</td><td>${r.totalApplications}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            } else if (type === 'repeat') {
+                container.innerHTML = `
+                    <h4>Repeat Applicants (HAVING COUNT > 1)</h4>
+                    <table style="margin-top:1rem;">
+                        <thead><tr><th>Customer ID</th><th>Name</th><th>Mobile</th><th>Application Count</th><th>Total Requested Amount</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="5">No repeat applicants found.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName}</td><td>${r.mobile}</td><td><strong>${r.applicationCount}</strong></td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            }
+        }
+
+        async function loadReport(type) {
+            const container = document.getElementById('reportContainer');
+            container.innerHTML = '<p>Loading report data from database...</p>';
+
+            try {
+                let url = getApiHost();
+                if (type === 'register') url += '/api/reports/register';
+                else if (type === 'pipeline') url += '/api/reports/pipeline/product';
+                else if (type === 'disbursements') url += '/api/reports/disbursements';
+                else if (type === 'overdue') url += '/api/reports/overdue';
+                else if (type === 'no-disbursement') url += '/api/reports/no-disbursement';
+                else if (type === 'repeat') url += '/api/reports/repeat-applicants';
+
+                const res = await fetch(url, { headers: getAuthHeaders() });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Server error');
+                renderReportData(type, data);
+            } catch (e) {
+                container.innerHTML = '<p style="color:var(--danger)">Failed to load report: ' + e.message + '</p>';
+            }
+        }
+
+        async function runUtilitiesNow() {
+            const logBox = document.getElementById('utilLogBox');
+            logBox.textContent = "Triggering Overdue Review Monitor and Core Banking Push pipelines...\n";
+
+            try {
+                const res = await fetch(getApiHost() + '/api/utilities/run', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Utility run failed');
+                logBox.textContent += JSON.stringify(data, null, 2);
+                showAlert('Background utilities executed successfully! Loans pushed to Core Banking.', true);
+                await loadApplications();
+            } catch (err) {
+                logBox.textContent += "\nError: " + err.message;
+                showAlert('Utility execution failed: ' + err.message, false);
+            }
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>

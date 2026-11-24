@@ -1,0 +1,14 @@
+# Dependencies & Builds
+node_modules/
+target/
+*.class
+
+# Environment & IDE
+.env
+.env.local
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml
+.vercel/
