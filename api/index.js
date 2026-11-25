@@ -434,7 +434,7 @@ async function ensureSchema(p) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Role, X-User-Name');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Role, X-User-Name, X-Business-Date');
   if (req.method === 'OPTIONS') return res.status(204).end();
 
   const rawUrl  = req.url || '';
@@ -445,6 +445,9 @@ export default async function handler(req, res) {
 
   const userRole = (req.headers['x-user-role'] || 'ADMIN').toUpperCase();
   const userName = req.headers['x-user-name'] || 'admin_super';
+  const businessDate = (req.headers['x-business-date'] && /^\d{4}-\d{2}-\d{2}$/.test(req.headers['x-business-date']))
+    ? req.headers['x-business-date']
+    : SUPABASE_CONFIG.businessDate;
 
   // =========================================================================
   // 1. HEALTH CHECK
@@ -593,30 +596,29 @@ export default async function handler(req, res) {
 
       const cfg    = PRODUCT_CONFIG[product];
       const P      = parseFloat(body.requestedAmount);
+      const rawN   = Number(body.tenureMonths);
       const n      = parseInt(body.tenureMonths, 10);
       const income = parseFloat(body.monthlyIncome);
       const oblig  = parseFloat(body.existingMonthlyObligations || 0);
 
-      // Basic range validation on draft creation
-      const rangeErrors = [];
-      if (P < cfg.minAmount || P > cfg.maxAmount)
-        rangeErrors.push(`Amount for ${product} must be INR ${formatINR(cfg.minAmount)} – INR ${formatINR(cfg.maxAmount)}.`);
-      if (n < cfg.minTenure || n > cfg.maxTenure)
-        rangeErrors.push(`Tenure for ${product} must be ${cfg.minTenure}–${cfg.maxTenure} months.`);
-      if (income <= 0)
-        rangeErrors.push('Monthly income must be positive.');
-      if (rangeErrors.length) return res.status(400).json({ error: rangeErrors.join(' ') });
-
-      const rate = cfg.annualInterestRate;
-      const emi  = calculateEmi(P, rate, n);
-      const foir = Math.round(((oblig + emi) / income * 100) * 100) / 100;
+      // Input sanity validation (positive income, nonnegative obligations, whole-number tenure)
+      const inputErrors = [];
+      if (isNaN(P) || P <= 0)
+        inputErrors.push('Requested amount must be positive.');
+      if (isNaN(rawN) || !Number.isInteger(rawN) || n <= 0)
+        inputErrors.push('Tenure must be a positive whole number.');
+      if (isNaN(income) || income <= 0)
+        inputErrors.push('Monthly income must be positive.');
+      if (isNaN(oblig) || oblig < 0)
+        inputErrors.push('Existing monthly obligations cannot be negative.');
+      if (inputErrors.length) return res.status(400).json({ error: inputErrors.join(' ') });
 
       const appNumber = 'APP-' + new Date().getFullYear() + '-' + String(Date.now()).slice(-6);
       const client = await p.connect();
       try {
         await client.query('BEGIN');
 
-        const custRes = await client.query('SELECT name FROM customer WHERE customer_id = $1;', [body.customerId]);
+        const custRes = await client.query('SELECT name, date_of_birth FROM customer WHERE customer_id = $1;', [body.customerId]);
         if (custRes.rows.length === 0) {
           await client.query('ROLLBACK');
           return res.status(404).json({ error: `Customer not found: ${body.customerId}` });
@@ -632,6 +634,12 @@ export default async function handler(req, res) {
           return res.status(409).json({ error: `Customer already has an active ${product} application.` });
         }
 
+        const evalRes = evaluateEligibility(
+          { product, requested_amount: P, tenure_months: n, monthly_income: income, existing_monthly_obligations: oblig },
+          custRes.rows[0].date_of_birth,
+          businessDate
+        );
+
         const r = await client.query(`
           INSERT INTO loan_application (
             application_number, customer_id, product, branch_code, branch_name,
@@ -642,9 +650,9 @@ export default async function handler(req, res) {
           RETURNING *;`,
           [appNumber, body.customerId, product,
            body.branchCode || 'BR001', body.branchName || 'Main Branch',
-           P, n, income, oblig, rate, emi, foir,
-           foir <= FOIR_LIMIT,
-           foir <= FOIR_LIMIT ? 'Draft created — eligibility pending submission.' : `Preliminary FOIR ${foir.toFixed(2)}% exceeds ${FOIR_LIMIT}%.`
+           P, n, income, oblig, evalRes.rate, evalRes.emi, evalRes.foir,
+           evalRes.eligible,
+           evalRes.eligible ? 'Draft created — all preliminary rules met.' : evalRes.failedRules.join(' | ')
           ]
         );
 
@@ -664,6 +672,107 @@ export default async function handler(req, res) {
       } finally {
         client.release();
       }
+    }
+  }
+
+  // =========================================================================
+  // 4b. EDIT APPLICATION DRAFT (Allowed ONLY in DRAFT status)
+  // =========================================================================
+  const editMatch = pathname.match(/^\/api\/applications\/(\d+)$/);
+  if (editMatch && method === 'PUT') {
+    if (!hasPermission(userRole, 'APPLICATION_DRAFT_EDIT'))
+      return res.status(403).json({ error: `Access Denied: ${userRole} cannot edit applications.` });
+
+    const appId = parseInt(editMatch[1], 10);
+    const body  = await parseBody(req);
+    const client = await p.connect();
+    try {
+      await client.query('BEGIN');
+
+      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id=$1 FOR UPDATE;', [appId]);
+      if (appRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Application not found.' });
+      }
+      const app = appRes.rows[0];
+      if (app.status !== 'DRAFT') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Editing is allowed only in DRAFT status. Current status: ${app.status}.` });
+      }
+
+      const product = body.product ? String(body.product).toUpperCase() : app.product;
+      if (!PRODUCT_CONFIG[product]) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Invalid product "${product}". Must be PERSONAL or EDUCATION.` });
+      }
+
+      const P      = body.requestedAmount !== undefined ? parseFloat(body.requestedAmount) : parseFloat(app.requested_amount);
+      const rawN   = body.tenureMonths !== undefined ? Number(body.tenureMonths) : Number(app.tenure_months);
+      const n      = body.tenureMonths !== undefined ? parseInt(body.tenureMonths, 10) : parseInt(app.tenure_months, 10);
+      const income = body.monthlyIncome !== undefined ? parseFloat(body.monthlyIncome) : parseFloat(app.monthly_income);
+      const oblig  = body.existingMonthlyObligations !== undefined ? parseFloat(body.existingMonthlyObligations) : parseFloat(app.existing_monthly_obligations || 0);
+      const bCode  = body.branchCode !== undefined ? String(body.branchCode).trim() : app.branch_code;
+      const bName  = body.branchName !== undefined ? String(body.branchName).trim() : app.branch_name;
+
+      const inputErrors = [];
+      if (isNaN(P) || P <= 0) inputErrors.push('Requested amount must be positive.');
+      if (isNaN(rawN) || !Number.isInteger(rawN) || n <= 0) inputErrors.push('Tenure must be a positive whole number.');
+      if (isNaN(income) || income <= 0) inputErrors.push('Monthly income must be positive.');
+      if (isNaN(oblig) || oblig < 0) inputErrors.push('Existing monthly obligations cannot be negative.');
+      if (inputErrors.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: inputErrors.join(' ') });
+      }
+
+      // If product changed, check active-application uniqueness for new product
+      if (product !== app.product) {
+        const activeRes = await client.query(
+          `SELECT 1 FROM loan_application WHERE customer_id=$1 AND product=$2 AND application_id<>$3 AND status IN ('DRAFT','UNDER_REVIEW','CREDIT_APPROVAL');`,
+          [app.customer_id, product, appId]
+        );
+        if (activeRes.rows.length > 0) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: `Customer already has an active ${product} application.` });
+        }
+      }
+
+      const custRes = await client.query('SELECT name, date_of_birth FROM customer WHERE customer_id=$1;', [app.customer_id]);
+      const evalRes = evaluateEligibility(
+        { product, requested_amount: P, tenure_months: n, monthly_income: income, existing_monthly_obligations: oblig },
+        custRes.rows[0]?.date_of_birth,
+        businessDate
+      );
+
+      const upd = await client.query(`
+        UPDATE loan_application
+        SET product=$1, branch_code=$2, branch_name=$3, requested_amount=$4, tenure_months=$5,
+            monthly_income=$6, existing_monthly_obligations=$7, annual_interest_rate=$8,
+            proposed_emi=$9, foir_percentage=$10, eligible=$11, eligibility_reasons=$12
+        WHERE application_id=$13
+        RETURNING *;`,
+        [
+          product, bCode || 'BR001', bName || 'Main Branch', P, n, income, oblig,
+          evalRes.rate, evalRes.emi, evalRes.foir, evalRes.eligible,
+          evalRes.eligible ? 'Draft updated — all preliminary rules met.' : evalRes.failedRules.join(' | '),
+          appId
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
+         VALUES ($1,'EDIT_DRAFT','DRAFT','DRAFT',$2,NOW(),'Draft financial/loan details updated');`,
+        [appId, userName]
+      );
+
+      await client.query('COMMIT');
+      const updated = upd.rows[0];
+      updated.customer_name = custRes.rows[0]?.name;
+      return res.status(200).json(mapApplication(updated));
+    } catch (err) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ error: 'Failed to update draft: ' + err.message });
+    } finally {
+      client.release();
     }
   }
 
@@ -694,7 +803,6 @@ export default async function handler(req, res) {
       // Fetch customer DOB for age validation
       const custRes = await client.query('SELECT date_of_birth FROM customer WHERE customer_id=$1;', [app.customer_id]);
       const customerDob = custRes.rows[0]?.date_of_birth;
-      const businessDate = SUPABASE_CONFIG.businessDate;
 
       // Full eligibility evaluation
       const { eligible, failedRules, emi, foir, rate } = evaluateEligibility(app, customerDob, businessDate);
@@ -803,6 +911,8 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: `Access Denied: ${userRole} cannot disburse applications.` });
 
     const appId  = parseInt(disburseMatch[1], 10);
+    const body   = await parseBody(req);
+    const customRef = body && body.reference ? String(body.reference).trim() : '';
     const client = await p.connect();
     try {
       await client.query('BEGIN');
@@ -813,7 +923,7 @@ export default async function handler(req, res) {
         return res.status(404).json({ error: 'Application not found.' });
       }
       const app = appRes.rows[0];
-      if (app.status !== 'CREDIT_APPROVAL') {
+      if (app.status !== 'CREDIT_APPROVAL' && app.status !== 'APPROVED') {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `Cannot disburse from status ${app.status}. Must be CREDIT_APPROVAL.` });
       }
@@ -826,7 +936,14 @@ export default async function handler(req, res) {
       }
 
       const amount = parseFloat(app.requested_amount);
-      const ref    = 'DISB-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+      const ref    = customRef || ('DISB-' + Date.now() + '-' + Math.floor(Math.random() * 10000));
+
+      // Check duplicate reference explicitly
+      const refDup = await client.query('SELECT 1 FROM disbursement WHERE reference=$1;', [ref]);
+      if (refDup.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Duplicate disbursement reference "${ref}". Reference must be globally unique.` });
+      }
 
       await client.query(
         `INSERT INTO disbursement (application_id, reference, amount, disbursed_at) VALUES ($1,$2,$3,NOW());`,
@@ -838,8 +955,8 @@ export default async function handler(req, res) {
       );
       await client.query(
         `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-         VALUES ($1,'DISBURSE','CREDIT_APPROVAL','DISBURSED',$2,NOW(),$3);`,
-        [appId, userName, `Disbursed INR ${formatINR(amount)}. Ref: ${ref}`]
+         VALUES ($1,'DISBURSE',$2,'DISBURSED',$3,NOW(),$4);`,
+        [appId, app.status, userName, `Disbursed INR ${formatINR(amount)}. Ref: ${ref}`]
       );
 
       await client.query('COMMIT');
@@ -853,11 +970,14 @@ export default async function handler(req, res) {
         amount:            amount,
         formattedAmount:   'INR ' + formatINR(amount),
         reference:         ref,
-        date:              new Date().toISOString().split('T')[0],
+        date:              businessDate,
         status:            'DISBURSED'
       });
     } catch (err) {
       await client.query('ROLLBACK');
+      if (err && err.code === '23505') {
+        return res.status(409).json({ error: 'Duplicate disbursement or duplicate reference rejected by database constraint.' });
+      }
       return res.status(500).json({ error: 'Failed to disburse application: ' + err.message });
     } finally {
       client.release();
@@ -937,6 +1057,8 @@ export default async function handler(req, res) {
           ORDER BY product, status;
         `);
         return res.status(200).json(r.rows.map(row => ({
+          key1:              row.product,
+          key2:              row.status,
           product:           row.product,
           status:            row.status,
           totalApplications: parseInt(row.count, 10),
@@ -987,32 +1109,37 @@ export default async function handler(req, res) {
         sql += ' GROUP BY period, a.branch_code, a.branch_name ORDER BY period DESC;';
 
         const r = await p.query(sql, params);
-        return res.status(200).json(r.rows.map(row => ({
-          period:             String(row.period),
-          branchCode:         row.branch_code,
-          branchName:         row.branch_name,
-          totalDisbursements: parseInt(row.count, 10),
-          totalAmount:        parseFloat(row.total_amount || 0),
-          formattedAmount:    'INR ' + formatINR(row.total_amount || 0)
-        })));
+        return res.status(200).json(r.rows.map(row => {
+          const pStr = row.period instanceof Date ? row.period.toISOString().split('T')[0] : String(row.period);
+          return {
+            period:             pStr,
+            branchCode:         row.branch_code,
+            branchName:         row.branch_name,
+            periodOrBranch:     `${pStr} (${row.branch_code} - ${row.branch_name})`,
+            totalDisbursements: parseInt(row.count, 10),
+            totalAmount:        parseFloat(row.total_amount || 0),
+            formattedAmount:    'INR ' + formatINR(row.total_amount || 0)
+          };
+        }));
       }
 
       // ----- Report 4: Overdue reviews (UNDER_REVIEW > 2 calendar days) -----
       if (pathname === '/api/reports/overdue') {
         const r = await p.query(`
-          SELECT a.application_number, c.name AS customer_name,
+          SELECT a.application_number, c.name AS customer_name, a.product,
                  a.requested_amount, a.submitted_at,
-                 (CURRENT_DATE - a.submitted_at::DATE) AS days_waiting
+                 ($1::DATE - a.submitted_at::DATE) AS days_waiting
           FROM loan_application a
           LEFT JOIN customer c ON a.customer_id = c.customer_id
           WHERE a.status = 'UNDER_REVIEW'
             AND a.submitted_at IS NOT NULL
-            AND (CURRENT_DATE - a.submitted_at::DATE) > ${OVERDUE_DAYS}
+            AND ($1::DATE - a.submitted_at::DATE) > ${OVERDUE_DAYS}
           ORDER BY days_waiting DESC;
-        `);
+        `, [businessDate]);
         return res.status(200).json(r.rows.map(row => ({
           applicationNumber: row.application_number,
           customerName:      row.customer_name || '',
+          product:           row.product || '',
           formattedAmount:   'INR ' + formatINR(row.requested_amount),
           submittedAt:       row.submitted_at instanceof Date ? row.submitted_at.toISOString().split('T')[0] : String(row.submitted_at),
           daysWaiting:       parseInt(row.days_waiting, 10)
@@ -1022,22 +1149,23 @@ export default async function handler(req, res) {
       // ----- Report 5: Customers without disbursement -----
       if (pathname === '/api/reports/no-disbursement') {
         const r = await p.query(`
-          SELECT DISTINCT c.customer_id, c.name, c.mobile
+          SELECT c.customer_id, c.name, c.mobile, COUNT(la.application_id) AS total_applications
           FROM customer c
-          WHERE EXISTS (
-            SELECT 1 FROM loan_application la WHERE la.customer_id = c.customer_id
-          )
-          AND NOT EXISTS (
+          JOIN loan_application la ON la.customer_id = c.customer_id
+          WHERE NOT EXISTS (
             SELECT 1 FROM loan_application la2
             JOIN disbursement d ON d.application_id = la2.application_id
             WHERE la2.customer_id = c.customer_id
           )
+          GROUP BY c.customer_id, c.name, c.mobile
           ORDER BY c.name;
         `);
         return res.status(200).json(r.rows.map(row => ({
-          customerId: row.customer_id,
-          name:       row.name,
-          mobile:     row.mobile
+          customerId:        row.customer_id,
+          customerName:      row.name,
+          name:              row.name,
+          mobile:            row.mobile,
+          totalApplications: parseInt(row.total_applications, 10)
         })));
       }
 
@@ -1055,10 +1183,12 @@ export default async function handler(req, res) {
         `);
         return res.status(200).json(r.rows.map(row => ({
           customerId:        row.customer_id,
+          customerName:      row.name,
           name:              row.name,
           mobile:            row.mobile,
           applicationCount:  parseInt(row.application_count, 10),
           totalRequested:    parseFloat(row.total_requested || 0),
+          formattedAmount:   'INR ' + formatINR(row.total_requested || 0),
           formattedTotal:    'INR ' + formatINR(row.total_requested || 0)
         })));
       }

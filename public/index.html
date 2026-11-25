@@ -569,7 +569,10 @@
             </div>
 
             <div class="card">
-                <div class="card-title">Registered Customer Directory</div>
+                <div class="card-title">
+                    <span>Registered Customer Directory</span>
+                    <input type="text" id="customerSearchInput" placeholder="Search by ID, name, or mobile..." oninput="filterCustomers()" style="max-width:280px; padding:0.45rem 0.75rem; font-size:0.85rem;">
+                </div>
                 <div class="table-responsive">
                     <table>
                         <thead>
@@ -615,15 +618,15 @@
                         </div>
                         <div class="form-group">
                             <label>Requested Amount (INR) *</label>
-                            <input type="number" id="appAmount" required min="50000" step="1000" value="100000" oninput="calculateLiveEmi()">
+                            <input type="number" id="appAmount" required min="1" step="1" value="100000" oninput="calculateLiveEmi()">
                         </div>
                         <div class="form-group">
                             <label>Tenure (Months) *</label>
-                            <input type="number" id="appTenure" required min="12" max="84" value="12" oninput="calculateLiveEmi()">
+                            <input type="number" id="appTenure" required min="1" step="1" value="12" oninput="calculateLiveEmi()">
                         </div>
                         <div class="form-group">
                             <label>Monthly Net Income (INR) *</label>
-                            <input type="number" id="appIncome" required min="15000" step="500" value="50000" oninput="calculateLiveEmi()">
+                            <input type="number" id="appIncome" required min="1" step="1" value="50000" oninput="calculateLiveEmi()">
                         </div>
                         <div class="form-group">
                             <label>Existing Monthly Obligations (INR)</label>
@@ -727,6 +730,33 @@
 
                 <h4 style="margin-bottom: 0.75rem;">Execution Logs</h4>
                 <div class="log-box" id="utilLogBox">System initialized. Click 'Trigger All Background Jobs Now' to run pipelines immediately.</div>
+
+                <div style="margin-top:1.5rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap:1.25rem;">
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <h4>System Alerts (REVIEW_OVERDUE)</h4>
+                            <button class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="loadUtilityTables()">Refresh</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table>
+                                <thead><tr><th>App #</th><th>Alert Type</th><th>Created At</th></tr></thead>
+                                <tbody id="alertsTableBody"><tr><td colspan="3" style="color:var(--text-muted)">Click Refresh or run utilities to load alerts.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <h4>NG_CORE_BANKING Sync Log</h4>
+                            <button class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="loadUtilityTables()">Refresh</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table>
+                                <thead><tr><th>App ID</th><th>Customer</th><th>Disbursed</th><th>Date</th></tr></thead>
+                                <tbody id="coreBankingTableBody"><tr><td colspan="4" style="color:var(--text-muted)">Click Refresh or run utilities to load core banking records.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -750,6 +780,69 @@
                 <button class="btn btn-outline" onclick="closeReviewModal()">Cancel</button>
                 <button class="btn btn-danger" onclick="submitReview(false)">Reject</button>
                 <button class="btn btn-success" onclick="submitReview(true)">Approve Loan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Draft Modal Dialog -->
+    <div id="editDraftModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+        <div style="background:white; border-radius:10px; padding:2rem; width:500px; max-width:92vw;">
+            <h3 style="margin-bottom:0.5rem;">Edit Draft Application</h3>
+            <p id="editDraftAppNumber" style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;"></p>
+            <input type="hidden" id="editDraftId">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Product</label>
+                    <select id="editDraftProduct">
+                        <option value="PERSONAL">PERSONAL</option>
+                        <option value="EDUCATION">EDUCATION</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Requested Amount (INR)</label>
+                    <input type="number" id="editDraftAmount" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Tenure (Months)</label>
+                    <input type="number" id="editDraftTenure" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Monthly Net Income (INR)</label>
+                    <input type="number" id="editDraftIncome" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Existing Obligations (INR)</label>
+                    <input type="number" id="editDraftObligations" min="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Branch Code</label>
+                    <input type="text" id="editDraftBranchCode">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Branch Name</label>
+                    <input type="text" id="editDraftBranchName">
+                </div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1.25rem;">
+                <button class="btn btn-outline" onclick="closeEditDraftModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveDraftEdit()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Disburse Modal Dialog -->
+    <div id="disburseModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+        <div style="background:white; border-radius:10px; padding:2rem; width:450px; max-width:90vw;">
+            <h3 style="margin-bottom:0.5rem;">Confirm Loan Disbursement</h3>
+            <p id="disburseModalDetails" style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.25rem;"></p>
+            <input type="hidden" id="disburseAppId">
+            <div class="form-group" style="margin-bottom:1.25rem;">
+                <label>Disbursement Reference (Optional — leave blank to auto-generate unique ref)</label>
+                <input type="text" id="disburseRefInput" placeholder="e.g. UTR-2026-0001">
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                <button class="btn btn-outline" onclick="closeDisburseModal()">Cancel</button>
+                <button class="btn btn-success" onclick="confirmDisburse()">Disburse Full Amount</button>
             </div>
         </div>
     </div>
@@ -962,6 +1055,20 @@
             }
         }
 
+        function filterCustomers() {
+            const q = (document.getElementById('customerSearchInput')?.value || '').trim().toLowerCase();
+            if (!q) {
+                renderCustomerTable(cachedCustomers);
+                return;
+            }
+            const filtered = cachedCustomers.filter(c =>
+                (c.customerId || '').toLowerCase().includes(q) ||
+                (c.name || '').toLowerCase().includes(q) ||
+                (c.mobile || '').toLowerCase().includes(q)
+            );
+            renderCustomerTable(filtered);
+        }
+
         function populateCustomerDropdown(customers) {
             const sel = document.getElementById('appCustomerId');
             const prevVal = sel.value;
@@ -1120,7 +1227,9 @@
 
                 if (a.status === 'DRAFT') {
                     if (canSubmit) {
-                        actionBtns = `<button class="btn btn-primary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="submitApp(${a.applicationId})">Submit</button>`;
+                        actionBtns = `
+                            <button class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem; margin-right:0.25rem;" onclick="openEditDraftModal(${a.applicationId})">Edit</button>
+                            <button class="btn btn-primary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="submitApp(${a.applicationId})">Submit</button>`;
                     } else {
                         actionBtns = `<span style="color:var(--text-muted); font-size:0.78rem;">Submit (Requires LOAN_OFFICER)</span>`;
                     }
@@ -1132,13 +1241,14 @@
                     }
                 } else if (a.status === 'CREDIT_APPROVAL') {
                     if (canDisburse) {
-                        actionBtns = `<button class="btn btn-success" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="disburseApp(${a.applicationId})">Disburse</button>`;
+                        actionBtns = `<button class="btn btn-success" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="openDisburseModal(${a.applicationId}, '${a.applicationNumber}', ${a.requestedAmount})">Disburse</button>`;
                     } else {
                         actionBtns = `<span style="color:var(--text-muted); font-size:0.78rem;">Disburse (Requires DISBURSEMENT_OFFICER)</span>`;
                     }
                 } else {
-                    actionBtns = `<span style="color:var(--text-muted); font-size:0.8rem;">Terminal / Processed</span>`;
+                    actionBtns = `<span style="color:var(--text-muted); font-size:0.8rem;">${a.status === 'REJECTED' ? 'Rejected' : 'Completed'}</span>`;
                 }
+                actionBtns += ` <button class="btn btn-outline" style="padding:0.25rem 0.5rem; font-size:0.72rem; margin-left:0.25rem;" onclick="viewAppHistory(${a.applicationId})" title="${(a.eligibilityReasons || a.decisionReason || '').replace(/"/g, '&quot;')}">Details</button>`;
 
                 return `
                     <tr>
@@ -1197,6 +1307,52 @@
             }
         }
 
+        function openEditDraftModal(appId) {
+            const app = cachedApplications.find(a => a.applicationId === appId);
+            if (!app) return;
+            document.getElementById('editDraftId').value = app.applicationId;
+            document.getElementById('editDraftAppNumber').textContent = `Editing ${app.applicationNumber} (${app.customerName || app.customerId})`;
+            document.getElementById('editDraftProduct').value = app.product;
+            document.getElementById('editDraftAmount').value = app.requestedAmount;
+            document.getElementById('editDraftTenure').value = app.tenureMonths;
+            document.getElementById('editDraftIncome').value = app.monthlyIncome;
+            document.getElementById('editDraftObligations').value = app.existingMonthlyObligations || 0;
+            document.getElementById('editDraftBranchCode').value = app.branchCode || 'BR001';
+            document.getElementById('editDraftBranchName').value = app.branchName || 'Main Branch';
+            document.getElementById('editDraftModal').style.display = 'flex';
+        }
+
+        function closeEditDraftModal() {
+            document.getElementById('editDraftModal').style.display = 'none';
+        }
+
+        async function saveDraftEdit() {
+            const appId = document.getElementById('editDraftId').value;
+            const payload = {
+                product: document.getElementById('editDraftProduct').value,
+                requestedAmount: document.getElementById('editDraftAmount').value,
+                tenureMonths: document.getElementById('editDraftTenure').value,
+                monthlyIncome: document.getElementById('editDraftIncome').value,
+                existingMonthlyObligations: document.getElementById('editDraftObligations').value,
+                branchCode: document.getElementById('editDraftBranchCode').value,
+                branchName: document.getElementById('editDraftBranchName').value
+            };
+            try {
+                const res = await fetch(getApiHost() + `/api/applications/${appId}`, {
+                    method: 'PUT',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to update draft');
+                closeEditDraftModal();
+                showAlert(`✅ Draft ${data.applicationNumber} updated successfully!`, true);
+                await loadApplications();
+            } catch (err) {
+                showAlert('❌ ' + err.message, false);
+            }
+        }
+
         async function submitApp(appId) {
             try {
                 const res = await fetch(getApiHost() + `/api/applications/${appId}/submit`, {
@@ -1207,7 +1363,10 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Submission failed');
 
-                showAlert(`Application evaluated! Status: ${data.status}. Reason: ${data.eligibilityReasons || 'Passed criteria'}`, data.eligible);
+                const failedMsg = (data.allFailedRules && data.allFailedRules.length > 0)
+                    ? 'Failed Rules: ' + data.allFailedRules.join(' | ')
+                    : (data.eligibilityReasons || 'Passed all eligibility rules');
+                showAlert(`Application evaluated! Status: ${data.status}. ${failedMsg}`, data.eligible);
                 await loadApplications();
             } catch (err) {
                 showAlert('❌ ' + err.message, false);
@@ -1252,18 +1411,31 @@
             }
         }
 
-        async function disburseApp(appId) {
-            if (!confirm('Confirm disbursement for this approved loan application?')) return;
+        function openDisburseModal(appId, appNumber, amount) {
+            document.getElementById('disburseAppId').value = appId;
+            document.getElementById('disburseModalDetails').textContent = `Disbursing ${appNumber} for full approved amount INR ${formatIndianNumber(parseFloat(amount).toFixed(2))}`;
+            document.getElementById('disburseRefInput').value = '';
+            document.getElementById('disburseModal').style.display = 'flex';
+        }
+
+        function closeDisburseModal() {
+            document.getElementById('disburseModal').style.display = 'none';
+        }
+
+        async function confirmDisburse() {
+            const appId = document.getElementById('disburseAppId').value;
+            const reference = document.getElementById('disburseRefInput').value.trim();
             try {
                 const res = await fetch(getApiHost() + `/api/applications/${appId}/disburse`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
-                    body: JSON.stringify({ performedBy: currentUsername })
+                    body: JSON.stringify({ performedBy: currentUsername, reference: reference || undefined })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Disbursement failed');
 
-                showAlert(`Disbursement completed! Reference: ${data.reference} for amount INR ${formatIndianNumber(parseFloat(data.amount).toFixed(2))}`, true);
+                closeDisburseModal();
+                showAlert(`✅ Disbursement Confirmed! App: ${data.applicationNumber} | Customer: ${data.customer} | Amount: ${data.formattedAmount} | Ref: ${data.reference} | Date: ${data.date}`, true);
                 await loadApplications();
             } catch (err) {
                 showAlert('❌ ' + err.message, false);
@@ -1284,35 +1456,66 @@
             }
         }
 
-        function renderReportData(type, data) {
+        function renderReportData(type, data, extraData = null, filters = {}) {
             const container = document.getElementById('reportContainer');
             if (type === 'register') {
                 container.innerHTML = `
-                    <h4>Application Register</h4>
-                    <table style="margin-top:1rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+                        <h4>1. Application Register</h4>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <select id="repRegProduct" onchange="loadReport('register')" style="width:auto; padding:0.35rem 0.6rem;">
+                                <option value="">All Products</option>
+                                <option value="PERSONAL" ${filters.product==='PERSONAL'?'selected':''}>PERSONAL</option>
+                                <option value="EDUCATION" ${filters.product==='EDUCATION'?'selected':''}>EDUCATION</option>
+                            </select>
+                            <select id="repRegStatus" onchange="loadReport('register')" style="width:auto; padding:0.35rem 0.6rem;">
+                                <option value="">All Statuses</option>
+                                ${['DRAFT','UNDER_REVIEW','CREDIT_APPROVAL','REJECTED','DISBURSED','EXIT'].map(s => `<option value="${s}" ${filters.status===s?'selected':''}>${s}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    <table>
                         <thead><tr><th>App #</th><th>Customer</th><th>Product</th><th>Amount</th><th>EMI</th><th>Status</th><th>Submitted</th></tr></thead>
                         <tbody>${(!data || data.length === 0) ? '<tr><td colspan="7">No records found.</td></tr>' : data.map(r => `<tr><td><strong>${r.applicationNumber}</strong></td><td>${r.customerName}</td><td>${r.product}</td><td>${r.formattedRequestedAmount}</td><td>${r.formattedProposedEmi}</td><td><span class="status-pill status-${r.status}">${r.status}</span></td><td>${r.submittedAt || '-'}</td></tr>`).join('')}</tbody>
                     </table>
                 `;
             } else if (type === 'pipeline') {
                 container.innerHTML = `
-                    <h4>Product & Status Pipeline</h4>
-                    <table style="margin-top:1rem;">
+                    <h4>2a. Product & Status Pipeline</h4>
+                    <table style="margin-top:0.75rem; margin-bottom:1.5rem;">
                         <thead><tr><th>Product</th><th>Status</th><th>Total Count</th><th>Total Requested Volume</th></tr></thead>
-                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">No pipeline data.</td></tr>' : data.map(r => `<tr><td>${r.key1}</td><td><span class="status-pill status-${r.key2}">${r.key2}</span></td><td>${r.totalApplications}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">No pipeline data.</td></tr>' : data.map(r => `<tr><td>${r.product || r.key1}</td><td><span class="status-pill status-${r.status || r.key2}">${r.status || r.key2}</span></td><td>${r.totalApplications}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                    </table>
+                    <h4>2b. Branch & Product Pipeline</h4>
+                    <table style="margin-top:0.75rem;">
+                        <thead><tr><th>Branch Code</th><th>Branch Name</th><th>Product</th><th>Total Count</th><th>Total Requested Volume</th></tr></thead>
+                        <tbody>${(!extraData || extraData.length === 0) ? '<tr><td colspan="5">No branch pipeline data.</td></tr>' : extraData.map(r => `<tr><td><strong>${r.branchCode}</strong></td><td>${r.branchName}</td><td>${r.product}</td><td>${r.totalApplications}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
                     </table>
                 `;
             } else if (type === 'disbursements') {
                 container.innerHTML = `
-                    <h4>Disbursement Summary</h4>
-                    <table style="margin-top:1rem;">
-                        <thead><tr><th>Disbursement Date</th><th>Count</th><th>Total Disbursed Volume</th></tr></thead>
-                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="3">No disbursements recorded yet.</td></tr>' : data.map(r => `<tr><td>${r.periodOrBranch}</td><td>${r.totalDisbursements}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+                        <h4>3. Daily / Monthly / Quarterly Disbursements (Branch-wise)</h4>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                            <select id="repDisbGroup" style="width:auto; padding:0.35rem 0.6rem;">
+                                <option value="daily" ${filters.groupBy==='daily'?'selected':''}>Daily</option>
+                                <option value="monthly" ${filters.groupBy==='monthly'?'selected':''}>Monthly</option>
+                                <option value="quarterly" ${filters.groupBy==='quarterly'?'selected':''}>Quarterly</option>
+                            </select>
+                            <input type="date" id="repDisbFrom" value="${filters.from || ''}" style="width:auto; padding:0.35rem 0.5rem;">
+                            <input type="date" id="repDisbTo" value="${filters.to || ''}" style="width:auto; padding:0.35rem 0.5rem;">
+                            <input type="text" id="repDisbBranch" placeholder="Branch (e.g. BR001)" value="${filters.branch || ''}" style="width:140px; padding:0.35rem 0.5rem;">
+                            <button class="btn btn-primary" style="padding:0.35rem 0.75rem; font-size:0.8rem;" onclick="loadReport('disbursements')">Apply</button>
+                        </div>
+                    </div>
+                    <table>
+                        <thead><tr><th>Period</th><th>Branch</th><th>Count</th><th>Total Disbursed Volume</th></tr></thead>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">No disbursements recorded for selected criteria.</td></tr>' : data.map(r => `<tr><td><strong>${r.period}</strong></td><td>${r.branchCode} - ${r.branchName}</td><td>${r.totalDisbursements}</td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
                     </table>
                 `;
             } else if (type === 'overdue') {
                 container.innerHTML = `
-                    <h4>Overdue Reviews (> 2 Days Waiting)</h4>
+                    <h4>4. Overdue Reviews (&gt; 2 Calendar Days Waiting)</h4>
                     <table style="margin-top:1rem;">
                         <thead><tr><th>App #</th><th>Customer</th><th>Product</th><th>Amount</th><th>Submitted</th><th>Days Waiting</th></tr></thead>
                         <tbody>${(!data || data.length === 0) ? '<tr><td colspan="6">No applications overdue.</td></tr>' : data.map(r => `<tr><td><strong>${r.applicationNumber}</strong></td><td>${r.customerName}</td><td>${r.product}</td><td>${r.formattedAmount}</td><td>${r.submittedAt}</td><td><strong style="color:var(--danger)">${r.daysWaiting} days</strong></td></tr>`).join('')}</tbody>
@@ -1320,18 +1523,18 @@
                 `;
             } else if (type === 'no-disbursement') {
                 container.innerHTML = `
-                    <h4>Customers Without Disbursement (0 Payouts)</h4>
+                    <h4>5. Customers Without Disbursement (0 Payouts)</h4>
                     <table style="margin-top:1rem;">
                         <thead><tr><th>Customer ID</th><th>Name</th><th>Mobile</th><th>Total Applications</th></tr></thead>
-                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">All customers have received disbursements.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName}</td><td>${r.mobile}</td><td>${r.totalApplications}</td></tr>`).join('')}</tbody>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="4">All customers with applications have received disbursements.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName || r.name}</td><td>${r.mobile}</td><td>${r.totalApplications}</td></tr>`).join('')}</tbody>
                     </table>
                 `;
             } else if (type === 'repeat') {
                 container.innerHTML = `
-                    <h4>Repeat Applicants (HAVING COUNT > 1)</h4>
+                    <h4>6. Repeat Applicants (GROUP BY / HAVING COUNT &gt; 1)</h4>
                     <table style="margin-top:1rem;">
                         <thead><tr><th>Customer ID</th><th>Name</th><th>Mobile</th><th>Application Count</th><th>Total Requested Amount</th></tr></thead>
-                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="5">No repeat applicants found.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName}</td><td>${r.mobile}</td><td><strong>${r.applicationCount}</strong></td><td>${r.formattedAmount}</td></tr>`).join('')}</tbody>
+                        <tbody>${(!data || data.length === 0) ? '<tr><td colspan="5">No repeat applicants found.</td></tr>' : data.map(r => `<tr><td><strong>${r.customerId}</strong></td><td>${r.customerName || r.name}</td><td>${r.mobile}</td><td><strong>${r.applicationCount}</strong></td><td>${r.formattedAmount || r.formattedTotal}</td></tr>`).join('')}</tbody>
                     </table>
                 `;
             }
@@ -1339,23 +1542,82 @@
 
         async function loadReport(type) {
             const container = document.getElementById('reportContainer');
+            const filters = {};
+            if (type === 'register') {
+                filters.product = document.getElementById('repRegProduct')?.value || '';
+                filters.status  = document.getElementById('repRegStatus')?.value  || '';
+            } else if (type === 'disbursements') {
+                filters.groupBy = document.getElementById('repDisbGroup')?.value || 'daily';
+                filters.from    = document.getElementById('repDisbFrom')?.value  || '';
+                filters.to      = document.getElementById('repDisbTo')?.value    || '';
+                filters.branch  = document.getElementById('repDisbBranch')?.value.trim() || '';
+            }
+
             container.innerHTML = '<p>Loading report data from database...</p>';
 
             try {
                 let url = getApiHost();
-                if (type === 'register') url += '/api/reports/register';
-                else if (type === 'pipeline') url += '/api/reports/pipeline/product';
-                else if (type === 'disbursements') url += '/api/reports/disbursements';
-                else if (type === 'overdue') url += '/api/reports/overdue';
+                if (type === 'register') {
+                    const qs = new URLSearchParams();
+                    if (filters.product) qs.set('product', filters.product);
+                    if (filters.status)  qs.set('status', filters.status);
+                    url += '/api/reports/register' + (qs.toString() ? '?' + qs.toString() : '');
+                } else if (type === 'pipeline') {
+                    const [res1, res2] = await Promise.all([
+                        fetch(getApiHost() + '/api/reports/pipeline/product', { headers: getAuthHeaders() }),
+                        fetch(getApiHost() + '/api/reports/pipeline/branch',  { headers: getAuthHeaders() })
+                    ]);
+                    const [d1, d2] = await Promise.all([res1.json(), res2.json()]);
+                    if (!res1.ok) throw new Error(d1.error || 'Server error');
+                    if (!res2.ok) throw new Error(d2.error || 'Server error');
+                    renderReportData(type, d1, d2, filters);
+                    return;
+                } else if (type === 'disbursements') {
+                    const qs = new URLSearchParams();
+                    if (filters.groupBy) qs.set('groupBy', filters.groupBy);
+                    if (filters.from)    qs.set('from', filters.from);
+                    if (filters.to)      qs.set('to', filters.to);
+                    if (filters.branch)  qs.set('branch', filters.branch);
+                    url += '/api/reports/disbursements?' + qs.toString();
+                } else if (type === 'overdue') url += '/api/reports/overdue';
                 else if (type === 'no-disbursement') url += '/api/reports/no-disbursement';
                 else if (type === 'repeat') url += '/api/reports/repeat-applicants';
 
                 const res = await fetch(url, { headers: getAuthHeaders() });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Server error');
-                renderReportData(type, data);
+                renderReportData(type, data, null, filters);
             } catch (e) {
                 container.innerHTML = '<p style="color:var(--danger)">Failed to load report: ' + e.message + '</p>';
+            }
+        }
+
+        async function loadUtilityTables() {
+            try {
+                const [aRes, cRes] = await Promise.all([
+                    fetch(getApiHost() + '/api/alerts', { headers: getAuthHeaders() }),
+                    fetch(getApiHost() + '/api/core-banking', { headers: getAuthHeaders() })
+                ]);
+                if (aRes.ok) {
+                    const alerts = await aRes.json();
+                    const tbody = document.getElementById('alertsTableBody');
+                    if (tbody) {
+                        tbody.innerHTML = alerts.length === 0
+                            ? '<tr><td colspan="3" style="color:var(--text-muted)">No overdue alerts recorded.</td></tr>'
+                            : alerts.map(a => `<tr><td><strong>${a.application_number}</strong></td><td><span class="status-pill status-REJECTED">${a.alert_type}</span></td><td>${String(a.created_at).split('T')[0]}</td></tr>`).join('');
+                    }
+                }
+                if (cRes.ok) {
+                    const core = await cRes.json();
+                    const tbody = document.getElementById('coreBankingTableBody');
+                    if (tbody) {
+                        tbody.innerHTML = core.length === 0
+                            ? '<tr><td colspan="4" style="color:var(--text-muted)">No loans pushed to NG_CORE_BANKING yet.</td></tr>'
+                            : core.map(c => `<tr><td><strong>${c.application_id}</strong></td><td>${c.customer_name}</td><td>INR ${formatIndianNumber(parseFloat(c.disbursed_amount).toFixed(2))}</td><td>${String(c.disbursed_date).split('T')[0]}</td></tr>`).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('loadUtilityTables error:', e);
             }
         }
 
@@ -1372,7 +1634,7 @@
                 if (!res.ok) throw new Error(data.error || 'Utility run failed');
                 logBox.textContent += JSON.stringify(data, null, 2);
                 showAlert('Background utilities executed successfully! Loans pushed to Core Banking.', true);
-                await loadApplications();
+                await Promise.all([loadApplications(), loadUtilityTables()]);
             } catch (err) {
                 logBox.textContent += "\nError: " + err.message;
                 showAlert('Utility execution failed: ' + err.message, false);
