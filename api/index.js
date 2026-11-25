@@ -440,10 +440,14 @@ async function ensureSchema(p) {
     BEGIN
       FOR col IN
         SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'ng_core_banking' AND is_nullable = 'NO'
+        WHERE table_schema = current_schema() AND table_name = 'ng_core_banking' AND is_nullable = 'NO'
           AND column_name NOT IN ('core_id','id','application_id','customer_id','customer_name','address','dob','kyc_details','approved_amount','disbursed_amount','disbursed_date','synced_at')
       LOOP
-        EXECUTE format('ALTER TABLE ng_core_banking ALTER COLUMN %I DROP NOT NULL', col.column_name);
+        BEGIN
+          EXECUTE format('ALTER TABLE ng_core_banking ALTER COLUMN %I DROP NOT NULL', col.column_name);
+        EXCEPTION WHEN OTHERS THEN
+          NULL;
+        END;
       END LOOP;
     END $$;`,
     `DO $$ BEGIN
@@ -1297,19 +1301,40 @@ export default async function handler(req, res) {
           );
       `);
 
+      // Check if legacy column account_number exists on ng_core_banking
+      const cbColsRes = await client.query(`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'ng_core_banking' AND column_name = 'account_number';
+      `);
+      const hasAccountNumber = cbColsRes.rows.length > 0;
+
       let pushedCount = 0;
       for (const row of disbursedApps.rows) {
-        await client.query(`
-          INSERT INTO ng_core_banking
-            (application_id, customer_id, customer_name, address, dob, kyc_details,
-             approved_amount, disbursed_amount, disbursed_date, synced_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW());
-        `, [
-          row.application_id, row.customer_id, row.customer_name, row.address,
-          row.date_of_birth instanceof Date ? row.date_of_birth.toISOString().split('T')[0] : row.date_of_birth,
-          row.kyc_details, row.requested_amount, row.disbursed_amount,
-          row.disbursed_at instanceof Date ? row.disbursed_at.toISOString().split('T')[0] : row.disbursed_at
-        ]);
+        const dobVal = row.date_of_birth instanceof Date ? row.date_of_birth.toISOString().split('T')[0] : row.date_of_birth;
+        const disbDateVal = row.disbursed_at instanceof Date ? row.disbursed_at.toISOString().split('T')[0] : row.disbursed_at;
+
+        if (hasAccountNumber) {
+          await client.query(`
+            INSERT INTO ng_core_banking
+              (account_number, application_id, customer_id, customer_name, address, dob, kyc_details,
+               approved_amount, disbursed_amount, disbursed_date, synced_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW());
+          `, [
+            'CB-' + String(row.application_id).padStart(6, '0'),
+            row.application_id, row.customer_id, row.customer_name, row.address,
+            dobVal, row.kyc_details, row.requested_amount, row.disbursed_amount, disbDateVal
+          ]);
+        } else {
+          await client.query(`
+            INSERT INTO ng_core_banking
+              (application_id, customer_id, customer_name, address, dob, kyc_details,
+               approved_amount, disbursed_amount, disbursed_date, synced_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW());
+          `, [
+            row.application_id, row.customer_id, row.customer_name, row.address,
+            dobVal, row.kyc_details, row.requested_amount, row.disbursed_amount, disbDateVal
+          ]);
+        }
 
         await client.query(`UPDATE loan_application SET status='EXIT' WHERE application_id=$1;`, [row.application_id]);
 
