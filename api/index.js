@@ -280,6 +280,26 @@ async function ensureSchema(p) {
       disbursed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Migration: add columns that may be missing on pre-existing disbursement table
+    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS reference VARCHAR(50);
+    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount NUMERIC(15,2);
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'disbursement_reference_key' AND conrelid = 'disbursement'::regclass
+      ) THEN
+        ALTER TABLE disbursement ADD CONSTRAINT disbursement_reference_key UNIQUE (reference);
+      END IF;
+    END $$;
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'disbursement_application_id_key' AND conrelid = 'disbursement'::regclass
+      ) THEN
+        ALTER TABLE disbursement ADD CONSTRAINT disbursement_application_id_key UNIQUE (application_id);
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS application_history (
       history_id BIGSERIAL PRIMARY KEY,
       application_id BIGINT NOT NULL REFERENCES loan_application(application_id) ON DELETE CASCADE,
