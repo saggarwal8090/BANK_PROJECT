@@ -1,7 +1,7 @@
 // ==============================================================================
-// Production-grade Vercel Serverless Function Adapter for Mini LOS
-// Connected strictly to Supabase PostgreSQL via raw SQL (pg Pool).
-// NO in-memory / RAM fallbacks: all state is persistent in Supabase PostgreSQL.
+// Production-grade Vercel Serverless Function — Mini LOS (Newgen Assignment)
+// Strictly connected to Supabase PostgreSQL. NO in-memory fallbacks.
+// All business rules match Assignment_1_Lending.pdf exactly.
 // ==============================================================================
 
 import http from 'http';
@@ -14,7 +14,9 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Helper to load config.properties (for local runs)
+// ---------------------------------------------------------------------------
+// Config: load config.properties for local runs
+// ---------------------------------------------------------------------------
 function loadConfigProperties() {
   const props = {};
   const searchPaths = [
@@ -30,13 +32,11 @@ function loadConfigProperties() {
           const trimmed = line.trim();
           if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
             const idx = trimmed.indexOf('=');
-            const key = trimmed.substring(0, idx).trim();
-            const val = trimmed.substring(idx + 1).trim();
-            props[key] = val;
+            props[trimmed.substring(0, idx).trim()] = trimmed.substring(idx + 1).trim();
           }
         });
         break;
-      } catch (ignored) {}
+      } catch (_) {}
     }
   }
   return props;
@@ -44,322 +44,380 @@ function loadConfigProperties() {
 
 const localProps = loadConfigProperties();
 
-// Database Configuration - Environment Variables strictly take precedence
-const rawDbUrl = process.env.DB_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL || localProps['db.url'] || 'jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require';
+// ---------------------------------------------------------------------------
+// Product configuration (configurable per assignment requirement)
+// ---------------------------------------------------------------------------
+const PRODUCT_CONFIG = {
+  PERSONAL: {
+    minAmount: 50000,
+    maxAmount: 500000,
+    minTenure: 12,
+    maxTenure: 60,
+    minMonthlyIncome: 20000,
+    annualInterestRate: 12.0
+  },
+  EDUCATION: {
+    minAmount: 100000,
+    maxAmount: 1000000,
+    minTenure: 12,
+    maxTenure: 84,
+    minMonthlyIncome: 15000,
+    annualInterestRate: 10.0
+  }
+};
 
-// Clean JDBC URL prefix for node-postgres
+const FOIR_LIMIT = 50.0;       // FOIR must be <= 50%
+const MIN_AGE = 21;             // Customer must be at least 21
+const MAX_AGE = 60;             // Customer must be no more than 60
+const OVERDUE_DAYS = 2;         // Reviews older than 2 calendar days are overdue
+
+// ---------------------------------------------------------------------------
+// DB Connection — env vars first, then config.properties, then defaults
+// ---------------------------------------------------------------------------
+const rawDbUrl = process.env.DB_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL
+  || localProps['db.url'] || 'jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require';
+
 const cleanDbUrl = rawDbUrl.replace(/^jdbc:/, '');
 
-// Parse Host, Port, Database, User, and Password from URL if present
-let urlUser = '';
-let urlPassword = '';
+let urlUser = '', urlPassword = '';
 let dbHost = 'aws-0-ap-southeast-1.pooler.supabase.com';
 let dbPort = 5432;
 let dbDatabase = 'postgres';
 
 try {
   const urlObj = new URL(cleanDbUrl);
-  dbHost = urlObj.hostname || dbHost;
-  dbPort = parseInt(urlObj.port || '5432', 10);
+  dbHost     = urlObj.hostname || dbHost;
+  dbPort     = parseInt(urlObj.port || '5432', 10);
   dbDatabase = urlObj.pathname.replace(/^\//, '') || 'postgres';
-  if (urlObj.username) urlUser = decodeURIComponent(urlObj.username);
+  if (urlObj.username) urlUser     = decodeURIComponent(urlObj.username);
   if (urlObj.password) urlPassword = decodeURIComponent(urlObj.password);
-} catch (e) {
+} catch (_) {
   const m = cleanDbUrl.match(/postgresql:\/\/(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?\/([^?]+)/);
   if (m) {
-    if (m[1]) urlUser = decodeURIComponent(m[1]);
+    if (m[1]) urlUser     = decodeURIComponent(m[1]);
     if (m[2]) urlPassword = decodeURIComponent(m[2]);
-    dbHost = m[3];
-    dbPort = parseInt(m[4] || '5432', 10);
+    dbHost     = m[3];
+    dbPort     = parseInt(m[4] || '5432', 10);
     dbDatabase = m[5] || 'postgres';
   }
 }
 
-// User & Password: Env vars take highest priority, then URL components, then properties, then defaults
-let dbUser = process.env.DB_USER || process.env.POSTGRES_USER || urlUser || localProps['db.user'] || 'postgres.ciemfotaaupazeqxxuev';
+let dbUser     = process.env.DB_USER || process.env.POSTGRES_USER || urlUser || localProps['db.user'] || 'postgres.ciemfotaaupazeqxxuev';
 let dbPassword = process.env.DB_PASSWORD || process.env.POSTGRES_PASSWORD || urlPassword || localProps['db.password'] || 'postgres';
 
-// Auto-fix for Supabase Session Pooler (port 5432 / 6543):
-// When connecting to pooler.supabase.com, Supabase requires username in format: postgres.<project-ref>
-// If configured as just "postgres", auto-qualify with project reference to prevent auth routing failures.
 const SUPABASE_PROJECT_REF = 'ciemfotaaupazeqxxuev';
 if (dbHost.includes('pooler.supabase.com') && dbUser === 'postgres') {
   dbUser = `postgres.${SUPABASE_PROJECT_REF}`;
 }
 
-function getFriendlyDbErrorMessage(err) {
+function getFriendlyDbError(err) {
   if (!err || !err.message) return 'Unknown database error';
   if (err.message.includes('password authentication failed')) {
-    return `Password authentication failed for user "${dbUser}" on ${dbHost}. Please verify that DB_PASSWORD in Vercel is set to your real Supabase database password (not the placeholder 'postgres'). You can reset your password in Supabase Dashboard -> Project Settings -> Database -> Database Password.`;
+    return `Password authentication failed for user "${dbUser}" on ${dbHost}. Set DB_PASSWORD in Vercel to your real Supabase DB password (Supabase Dashboard → Project Settings → Database → Database Password).`;
   }
   return err.message;
 }
-
 function getMaskedDbUrl() {
   return rawDbUrl.replace(/(password=)[^&;]+/i, '$1******');
 }
 
-// Global Postgres connection pool with Supabase pooler SSL support
-let pool = null;
+const SUPABASE_CONFIG = {
+  url:            process.env.SUPABASE_URL           || localProps['supabase.url']           || `https://${SUPABASE_PROJECT_REF}.supabase.co`,
+  businessDate:   process.env.BUSINESS_DATE          || localProps['app.business_date']       || new Date().toISOString().split('T')[0]
+};
 
+// ---------------------------------------------------------------------------
+// Pool
+// ---------------------------------------------------------------------------
+let pool = null;
 function getPool() {
   if (!pool) {
     pool = new Pool({
-      host: dbHost,
-      port: dbPort,
-      database: dbDatabase,
-      user: dbUser,
-      password: dbPassword,
-      ssl: {
-        rejectUnauthorized: false
-      },
+      host: dbHost, port: dbPort, database: dbDatabase,
+      user: dbUser, password: dbPassword,
+      ssl: { rejectUnauthorized: false },
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 10000,
       max: 10
     });
-    pool.on('error', (err) => {
-      console.error('[Supabase PostgreSQL Pool Error]', err.message);
-    });
+    pool.on('error', err => console.error('[PG Pool Error]', err.message));
   }
   return pool;
 }
 
-const SUPABASE_CONFIG = {
-  url: process.env.SUPABASE_URL || localProps['supabase.url'] || 'https://ciemfotaaupazeqxxuev.supabase.co',
-  publishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || localProps['supabase.publishable_key'] || 'sb_publishable_kX3L5-No3WzDIen5e9KmOw_VFI6gMol',
-  secretKey: process.env.SUPABASE_SECRET_KEY || localProps['supabase.secret_key'] || 'your_supabase_secret_key',
-  jwksUrl: process.env.SUPABASE_JWKS_URL || localProps['supabase.jwks_url'] || 'https://ciemfotaaupazeqxxuev.supabase.co/auth/v1/.well-known/jwks.json',
-  businessDate: process.env.BUSINESS_DATE || localProps['app.business_date'] || new Date().toISOString().split('T')[0]
-};
-
-// Role permissions mapping
+// ---------------------------------------------------------------------------
+// RBAC
+// ---------------------------------------------------------------------------
 const ROLES = {
-  LOAN_OFFICER: ['CUSTOMER_CREATE', 'CUSTOMER_READ', 'APPLICATION_DRAFT_CREATE', 'APPLICATION_DRAFT_EDIT', 'APPLICATION_SUBMIT', 'APPLICATION_READ', 'REPORTS_VIEW'],
-  CREDIT_OFFICER: ['APPLICATION_READ', 'APPLICATION_REVIEW', 'CUSTOMER_READ', 'REPORTS_VIEW', 'AUDIT_LOG_VIEW'],
-  DISBURSEMENT_OFFICER: ['APPLICATION_READ', 'APPLICATION_DISBURSE', 'CUSTOMER_READ', 'REPORTS_VIEW', 'AUDIT_LOG_VIEW'],
-  AUDITOR: ['CUSTOMER_READ', 'APPLICATION_READ', 'REPORTS_VIEW', 'AUDIT_LOG_VIEW'],
-  ADMIN: ['ALL']
+  LOAN_OFFICER:         ['CUSTOMER_CREATE','CUSTOMER_READ','APPLICATION_DRAFT_CREATE','APPLICATION_DRAFT_EDIT','APPLICATION_SUBMIT','APPLICATION_READ','REPORTS_VIEW'],
+  CREDIT_OFFICER:       ['APPLICATION_READ','APPLICATION_REVIEW','CUSTOMER_READ','REPORTS_VIEW','AUDIT_LOG_VIEW'],
+  DISBURSEMENT_OFFICER: ['APPLICATION_READ','APPLICATION_DISBURSE','CUSTOMER_READ','REPORTS_VIEW','AUDIT_LOG_VIEW'],
+  AUDITOR:              ['CUSTOMER_READ','APPLICATION_READ','REPORTS_VIEW','AUDIT_LOG_VIEW'],
+  ADMIN:                ['ALL']
 };
-
-function hasPermission(role, permission) {
+function hasPermission(role, perm) {
   if (!role) return false;
   const perms = ROLES[role.toUpperCase()];
   if (!perms) return false;
-  return perms.includes('ALL') || perms.includes(permission);
+  return perms.includes('ALL') || perms.includes(perm);
 }
 
-// Indian Currency Formatter (##,##,###,###.##)
-function formatIndianCurrency(amount) {
+// ---------------------------------------------------------------------------
+// Financial helpers
+// ---------------------------------------------------------------------------
+function formatINR(amount) {
   if (amount === undefined || amount === null) return '0.00';
   const num = typeof amount === 'number' ? amount : parseFloat(amount);
   if (isNaN(num)) return '0.00';
-  const parts = num.toFixed(2).split('.');
-  let integerPart = parts[0];
-  const decimalPart = '.' + parts[1];
-  let lastThree = integerPart.substring(integerPart.length - 3);
-  const otherNumbers = integerPart.substring(0, integerPart.length - 3);
-  if (otherNumbers !== '') {
-    lastThree = ',' + lastThree;
-  }
-  return otherNumbers.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + lastThree + decimalPart;
+  const [intStr, dec] = num.toFixed(2).split('.');
+  const last3 = intStr.slice(-3);
+  const rest   = intStr.slice(0, -3);
+  return (rest !== '' ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' : '') + last3 + '.' + dec;
 }
 
-// EMI Math Formula (P * r * (1+r)^n / ((1+r)^n - 1))
 function calculateEmi(principal, annualRate, tenureMonths) {
   const r = annualRate / 12 / 100;
   const n = tenureMonths;
   if (r === 0 || n === 0) return 0;
   const factor = Math.pow(1 + r, n);
-  const emi = (principal * r * factor) / (factor - 1);
-  return Math.round((emi + Number.EPSILON) * 100) / 100;
+  return Math.round(((principal * r * factor) / (factor - 1)) * 100) / 100;
 }
 
-// Row mappers from PostgreSQL snake_case to API camelCase
+// ---------------------------------------------------------------------------
+// Age calculation (completed years on a given date)
+// ---------------------------------------------------------------------------
+function completedAge(dob, onDate) {
+  const d = new Date(dob);
+  const ref = new Date(onDate);
+  let age = ref.getFullYear() - d.getFullYear();
+  const m = ref.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && ref.getDate() < d.getDate())) age--;
+  return age;
+}
+
+// ---------------------------------------------------------------------------
+// Eligibility evaluation (run at submit time — returns all failed rules)
+// ---------------------------------------------------------------------------
+function evaluateEligibility(app, customerDob, businessDate) {
+  const cfg     = PRODUCT_CONFIG[app.product] || PRODUCT_CONFIG.PERSONAL;
+  const P       = parseFloat(app.requested_amount);
+  const n       = parseInt(app.tenure_months, 10);
+  const income  = parseFloat(app.monthly_income);
+  const oblig   = parseFloat(app.existing_monthly_obligations || 0);
+  const rate    = cfg.annualInterestRate;
+  const emi     = calculateEmi(P, rate, n);
+  const foir    = Math.round(((oblig + emi) / income * 100) * 100) / 100;
+  const age     = completedAge(customerDob, businessDate);
+
+  const failed = [];
+
+  // Customer age
+  if (age < MIN_AGE) failed.push(`Customer age ${age} years is below minimum ${MIN_AGE} years.`);
+  if (age > MAX_AGE) failed.push(`Customer age ${age} years exceeds maximum ${MAX_AGE} years.`);
+
+  // Future DOB (double-check)
+  if (new Date(customerDob) > new Date(businessDate)) failed.push('Date of birth cannot be a future date.');
+
+  // Income minimum
+  if (income < cfg.minMonthlyIncome) failed.push(`Monthly net income INR ${formatINR(income)} is below minimum INR ${formatINR(cfg.minMonthlyIncome)} for ${app.product}.`);
+
+  // Amount range
+  if (P < cfg.minAmount || P > cfg.maxAmount) failed.push(`Requested amount INR ${formatINR(P)} must be between INR ${formatINR(cfg.minAmount)} and INR ${formatINR(cfg.maxAmount)} for ${app.product}.`);
+
+  // Tenure range
+  if (n < cfg.minTenure || n > cfg.maxTenure) failed.push(`Tenure ${n} months must be between ${cfg.minTenure} and ${cfg.maxTenure} months for ${app.product}.`);
+
+  // Income positive
+  if (income <= 0) failed.push('Monthly net income must be positive.');
+
+  // FOIR
+  if (foir > FOIR_LIMIT) failed.push(`FOIR ${foir.toFixed(2)}% exceeds maximum ${FOIR_LIMIT}% (EMI INR ${formatINR(emi)} + obligations INR ${formatINR(oblig)} = INR ${formatINR(emi + oblig)} on income INR ${formatINR(income)}).`);
+
+  return { eligible: failed.length === 0, failedRules: failed, emi, foir, rate };
+}
+
+// ---------------------------------------------------------------------------
+// Row mappers (DB → API)
+// ---------------------------------------------------------------------------
 function mapCustomer(row) {
   if (!row) return null;
   return {
-    customerId: row.customer_id,
-    name: row.name,
+    customerId:  row.customer_id,
+    name:        row.name,
     dateOfBirth: row.date_of_birth instanceof Date ? row.date_of_birth.toISOString().split('T')[0] : String(row.date_of_birth || ''),
-    mobile: row.mobile,
-    address: row.address,
-    kycDetails: row.kyc_details,
-    createdAt: row.created_at
+    mobile:      row.mobile,
+    address:     row.address,
+    kycDetails:  row.kyc_details,
+    createdAt:   row.created_at
   };
 }
 
 function mapApplication(row) {
   if (!row) return null;
   return {
-    applicationId: parseInt(row.application_id, 10),
-    applicationNumber: row.application_number,
-    customerId: row.customer_id,
-    customerName: row.customer_name || row.customer_id,
-    product: row.product,
-    branchCode: row.branch_code,
-    branchName: row.branch_name,
-    requestedAmount: parseFloat(row.requested_amount),
-    tenureMonths: parseInt(row.tenure_months, 10),
-    monthlyIncome: parseFloat(row.monthly_income),
+    applicationId:              parseInt(row.application_id, 10),
+    applicationNumber:          row.application_number,
+    customerId:                 row.customer_id,
+    customerName:               row.customer_name || row.customer_id,
+    product:                    row.product,
+    branchCode:                 row.branch_code,
+    branchName:                 row.branch_name,
+    requestedAmount:            parseFloat(row.requested_amount),
+    tenureMonths:               parseInt(row.tenure_months, 10),
+    monthlyIncome:              parseFloat(row.monthly_income),
     existingMonthlyObligations: parseFloat(row.existing_monthly_obligations || 0),
-    annualInterestRate: parseFloat(row.annual_interest_rate),
-    proposedEmi: parseFloat(row.proposed_emi),
-    foir: parseFloat(row.foir_percentage),
-    foirPercentage: parseFloat(row.foir_percentage),
-    eligible: Boolean(row.eligible),
-    eligibilityReasons: row.eligibility_reasons,
-    status: row.status,
-    createdAt: row.created_at,
-    submittedAt: row.submitted_at instanceof Date ? row.submitted_at.toISOString().split('T')[0] : (row.submitted_at || null),
-    decidedAt: row.decided_at,
-    reviewerCode: row.reviewer_code,
-    decisionReason: row.decision_reason
+    annualInterestRate:         parseFloat(row.annual_interest_rate),
+    proposedEmi:                parseFloat(row.proposed_emi),
+    foir:                       parseFloat(row.foir_percentage),
+    foirPercentage:             parseFloat(row.foir_percentage),
+    eligible:                   Boolean(row.eligible),
+    eligibilityReasons:         row.eligibility_reasons,
+    status:                     row.status,
+    createdAt:                  row.created_at,
+    submittedAt:                row.submitted_at instanceof Date ? row.submitted_at.toISOString().split('T')[0] : (row.submitted_at || null),
+    decidedAt:                  row.decided_at,
+    reviewerCode:               row.reviewer_code,
+    decisionReason:             row.decision_reason
   };
 }
 
-// Body parsing helper
+// ---------------------------------------------------------------------------
+// Body parser
+// ---------------------------------------------------------------------------
 async function parseBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
-  if (req.body && typeof req.body === 'string') {
-    try { return JSON.parse(req.body); } catch (e) { return {}; }
-  }
-  return new Promise((resolve) => {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
+  return new Promise(resolve => {
+    let raw = '';
+    req.on('data', chunk => { raw += chunk.toString(); });
     req.on('end', () => {
-      try { resolve(body ? JSON.parse(body) : {}); }
-      catch (e) { resolve({}); }
+      try { resolve(JSON.parse(raw)); } catch (_) { resolve({}); }
     });
   });
 }
 
-// Idempotent schema verification using CREATE TABLE IF NOT EXISTS ONLY (NO DROP/TRUNCATE/DELETE)
+// ---------------------------------------------------------------------------
+// Schema initialisation — idempotent, run once per cold-start
+// ---------------------------------------------------------------------------
 let schemaInitialized = false;
 async function ensureSchema(p) {
   if (schemaInitialized) return;
   const ddl = `
     CREATE TABLE IF NOT EXISTS customer (
-      customer_id VARCHAR(15) PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
+      customer_id  VARCHAR(15) PRIMARY KEY,
+      name         VARCHAR(100) NOT NULL,
       date_of_birth DATE NOT NULL,
-      mobile VARCHAR(10) UNIQUE NOT NULL,
-      address TEXT NOT NULL,
-      kyc_details TEXT NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      mobile       VARCHAR(10)  UNIQUE NOT NULL,
+      address      TEXT         NOT NULL,
+      kyc_details  TEXT         NOT NULL,
+      created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS loan_application (
-      application_id BIGSERIAL PRIMARY KEY,
-      application_number VARCHAR(30) UNIQUE NOT NULL,
-      customer_id VARCHAR(15) NOT NULL REFERENCES customer(customer_id) ON DELETE RESTRICT,
-      product VARCHAR(20) NOT NULL,
-      branch_code VARCHAR(20) NOT NULL,
-      branch_name VARCHAR(100) NOT NULL,
-      requested_amount NUMERIC(15, 2) NOT NULL,
-      tenure_months INT NOT NULL,
-      monthly_income NUMERIC(15, 2) NOT NULL,
-      existing_monthly_obligations NUMERIC(15, 2) NOT NULL DEFAULT 0,
-      annual_interest_rate NUMERIC(5, 2) NOT NULL,
-      proposed_emi NUMERIC(15, 2) NOT NULL,
-      foir_percentage NUMERIC(5, 2) NOT NULL,
-      eligible BOOLEAN NOT NULL DEFAULT FALSE,
-      eligibility_reasons TEXT,
-      status VARCHAR(30) NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      submitted_at TIMESTAMP WITH TIME ZONE,
-      decided_at TIMESTAMP WITH TIME ZONE,
-      reviewer_code VARCHAR(50),
-      decision_reason TEXT
+      application_id               BIGSERIAL PRIMARY KEY,
+      application_number           VARCHAR(30) UNIQUE NOT NULL,
+      customer_id                  VARCHAR(15) NOT NULL REFERENCES customer(customer_id) ON DELETE RESTRICT,
+      product                      VARCHAR(20) NOT NULL CHECK (product IN ('PERSONAL','EDUCATION')),
+      branch_code                  VARCHAR(20) NOT NULL DEFAULT 'BR001',
+      branch_name                  VARCHAR(100) NOT NULL DEFAULT 'Main Branch',
+      requested_amount             NUMERIC(15,2) NOT NULL,
+      tenure_months                INT NOT NULL,
+      monthly_income               NUMERIC(15,2) NOT NULL,
+      existing_monthly_obligations NUMERIC(15,2) NOT NULL DEFAULT 0,
+      annual_interest_rate         NUMERIC(5,2)  NOT NULL,
+      proposed_emi                 NUMERIC(15,2) NOT NULL DEFAULT 0,
+      foir_percentage              NUMERIC(5,2)  NOT NULL DEFAULT 0,
+      eligible                     BOOLEAN       NOT NULL DEFAULT FALSE,
+      eligibility_reasons          TEXT,
+      status                       VARCHAR(30)   NOT NULL DEFAULT 'DRAFT',
+      created_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      submitted_at                 TIMESTAMP WITH TIME ZONE,
+      decided_at                   TIMESTAMP WITH TIME ZONE,
+      reviewer_code                VARCHAR(50),
+      decision_reason              TEXT
     );
 
     CREATE TABLE IF NOT EXISTS disbursement (
-      disbursement_id BIGSERIAL PRIMARY KEY,
-      application_id BIGINT UNIQUE NOT NULL REFERENCES loan_application(application_id) ON DELETE RESTRICT,
-      reference VARCHAR(50) UNIQUE NOT NULL,
-      amount NUMERIC(15, 2) NOT NULL,
-      disbursed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      disbursement_id  BIGSERIAL PRIMARY KEY,
+      application_id   BIGINT  UNIQUE NOT NULL REFERENCES loan_application(application_id) ON DELETE RESTRICT,
+      reference        VARCHAR(50) UNIQUE NOT NULL,
+      amount           NUMERIC(15,2) NOT NULL,
+      disbursed_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Migration: add columns that may be missing on pre-existing disbursement table
+    -- Migration: add columns to pre-existing disbursement table that may be missing
     ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS reference VARCHAR(50);
-    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount NUMERIC(15,2);
+    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount    NUMERIC(15,2);
     DO $$ BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'disbursement_reference_key' AND conrelid = 'disbursement'::regclass
-      ) THEN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_reference_key' AND conrelid='disbursement'::regclass) THEN
         ALTER TABLE disbursement ADD CONSTRAINT disbursement_reference_key UNIQUE (reference);
       END IF;
     END $$;
     DO $$ BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'disbursement_application_id_key' AND conrelid = 'disbursement'::regclass
-      ) THEN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_application_id_key' AND conrelid='disbursement'::regclass) THEN
         ALTER TABLE disbursement ADD CONSTRAINT disbursement_application_id_key UNIQUE (application_id);
       END IF;
     END $$;
 
     CREATE TABLE IF NOT EXISTS application_history (
-      history_id BIGSERIAL PRIMARY KEY,
+      history_id    BIGSERIAL PRIMARY KEY,
       application_id BIGINT NOT NULL REFERENCES loan_application(application_id) ON DELETE CASCADE,
-      action VARCHAR(50) NOT NULL,
-      old_status VARCHAR(30),
-      new_status VARCHAR(30) NOT NULL,
-      performed_by VARCHAR(50) NOT NULL,
-      performed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      remarks TEXT
+      action        VARCHAR(50) NOT NULL,
+      old_status    VARCHAR(30),
+      new_status    VARCHAR(30) NOT NULL,
+      performed_by  VARCHAR(50) NOT NULL,
+      performed_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      remarks       TEXT
     );
 
     CREATE TABLE IF NOT EXISTS system_alerts (
-      alert_id BIGSERIAL PRIMARY KEY,
+      alert_id       BIGSERIAL PRIMARY KEY,
       application_id BIGINT NOT NULL REFERENCES loan_application(application_id) ON DELETE CASCADE,
-      alert_type VARCHAR(50) NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      alert_type     VARCHAR(50) NOT NULL,
+      created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type)
     );
 
     CREATE TABLE IF NOT EXISTS utility_run (
-      run_id BIGSERIAL PRIMARY KEY,
-      utility_name VARCHAR(50) NOT NULL,
-      started_at TIMESTAMP WITH TIME ZONE NOT NULL,
-      completed_at TIMESTAMP WITH TIME ZONE,
-      result VARCHAR(30) NOT NULL,
+      run_id                 BIGSERIAL PRIMARY KEY,
+      utility_name           VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR',
+      started_at             TIMESTAMP WITH TIME ZONE NOT NULL,
+      completed_at           TIMESTAMP WITH TIME ZONE,
+      result                 VARCHAR(30) NOT NULL,
       applications_processed INT NOT NULL DEFAULT 0,
-      alerts_created INT NOT NULL DEFAULT 0,
-      error_message TEXT
+      alerts_created         INT NOT NULL DEFAULT 0,
+      error_message          TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ng_core_banking (
-      core_id BIGSERIAL PRIMARY KEY,
-      application_id BIGINT UNIQUE NOT NULL REFERENCES loan_application(application_id) ON DELETE RESTRICT,
-      customer_id VARCHAR(15) NOT NULL REFERENCES customer(customer_id) ON DELETE RESTRICT,
-      customer_name VARCHAR(100) NOT NULL,
-      address TEXT NOT NULL,
-      dob DATE NOT NULL,
-      kyc_details TEXT NOT NULL,
-      approved_amount NUMERIC(15, 2) NOT NULL,
-      disbursed_amount NUMERIC(15, 2) NOT NULL,
-      disbursed_date DATE NOT NULL,
-      synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      core_id          BIGSERIAL PRIMARY KEY,
+      application_id   BIGINT  UNIQUE NOT NULL REFERENCES loan_application(application_id) ON DELETE RESTRICT,
+      customer_id      VARCHAR(15) NOT NULL REFERENCES customer(customer_id) ON DELETE RESTRICT,
+      customer_name    VARCHAR(100) NOT NULL,
+      address          TEXT NOT NULL,
+      dob              DATE NOT NULL,
+      kyc_details      TEXT NOT NULL,
+      approved_amount  NUMERIC(15,2) NOT NULL,
+      disbursed_amount NUMERIC(15,2) NOT NULL,
+      disbursed_date   DATE NOT NULL,
+      synced_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS app_user (
-      user_id BIGSERIAL PRIMARY KEY,
-      username VARCHAR(50) UNIQUE NOT NULL,
-      full_name VARCHAR(100) NOT NULL,
-      role VARCHAR(30) NOT NULL,
-      email VARCHAR(100) UNIQUE NOT NULL,
+      user_id     BIGSERIAL PRIMARY KEY,
+      username    VARCHAR(50) UNIQUE NOT NULL,
+      full_name   VARCHAR(100) NOT NULL,
+      role        VARCHAR(30) NOT NULL,
+      email       VARCHAR(100) UNIQUE NOT NULL,
       branch_code VARCHAR(20) DEFAULT 'BR001',
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     INSERT INTO app_user (username, full_name, role, email, branch_code) VALUES
-    ('officer_ramesh', 'Ramesh Sharma', 'LOAN_OFFICER', 'ramesh@losbank.in', 'BR001'),
-    ('credit_priya', 'Priya Iyer', 'CREDIT_OFFICER', 'priya@losbank.in', 'BR001'),
-    ('treasury_amit', 'Amit Patel', 'DISBURSEMENT_OFFICER', 'amit@losbank.in', 'BR001'),
-    ('admin_super', 'Rajesh Gupta (Admin)', 'ADMIN', 'admin@losbank.in', 'HQ001'),
-    ('auditor_neha', 'Neha Kulkarni', 'AUDITOR', 'neha@losbank.in', 'AUDIT01')
+      ('officer_ramesh', 'Ramesh Sharma',       'LOAN_OFFICER',         'ramesh@losbank.in', 'BR001'),
+      ('credit_priya',   'Priya Iyer',           'CREDIT_OFFICER',       'priya@losbank.in',  'BR001'),
+      ('treasury_amit',  'Amit Patel',           'DISBURSEMENT_OFFICER', 'amit@losbank.in',   'BR001'),
+      ('admin_super',    'Rajesh Gupta (Admin)', 'ADMIN',                'admin@losbank.in',  'HQ001'),
+      ('auditor_neha',   'Neha Kulkarni',        'AUDITOR',              'neha@losbank.in',   'AUDIT01')
     ON CONFLICT (username) DO NOTHING;
   `;
   try {
@@ -370,289 +428,259 @@ async function ensureSchema(p) {
   }
 }
 
+// ===========================================================================
+// MAIN HANDLER
+// ===========================================================================
 export default async function handler(req, res) {
-  // Global CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Role, X-User-Name');
+  if (req.method === 'OPTIONS') return res.status(204).end();
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
-  const rawUrl = req.url || '';
-  const urlObj = new URL(rawUrl, 'http://localhost');
+  const rawUrl  = req.url || '';
+  const urlObj  = new URL(rawUrl, 'http://localhost');
   const pathname = urlObj.pathname;
-  const method = req.method;
+  const query   = urlObj.searchParams;
+  const method  = req.method;
 
   const userRole = (req.headers['x-user-role'] || 'ADMIN').toUpperCase();
   const userName = req.headers['x-user-name'] || 'admin_super';
 
-  // 1. HEALTH CHECK: strictly returns live PostgreSQL product name, version, and masked host
+  // =========================================================================
+  // 1. HEALTH CHECK
+  // =========================================================================
   if (pathname === '/api/health') {
     try {
       const p = getPool();
       await ensureSchema(p);
-      const dbResult = await p.query('SELECT version() AS version, current_database() AS db, current_user AS user;');
-      const versionStr = dbResult.rows[0]?.version || 'PostgreSQL';
-      const productName = versionStr.split(' ')[0] || 'PostgreSQL';
-
+      const r = await p.query('SELECT version() AS v, current_database() AS db, current_user AS u;');
+      const ver = r.rows[0]?.v || 'PostgreSQL';
       return res.status(200).json({
         status: 'UP',
-        environment: 'Vercel Serverless Production',
-        database: {
-          status: 'CONNECTED',
-          product: productName,
-          version: versionStr,
-          host: dbHost,
-          url: getMaskedDbUrl(),
-          user: dbUser,
-          connected: true
-        },
-        supabase: {
-          url: SUPABASE_CONFIG.url,
-          projectRef: 'ciemfotaaupazeqxxuev',
-          jwksUrl: SUPABASE_CONFIG.jwksUrl,
-          connected: true
-        },
-        rbac: {
-          currentUser: userName,
-          currentRole: userRole,
-          availableRoles: Object.keys(ROLES)
-        },
-        businessDate: SUPABASE_CONFIG.businessDate
+        environment: 'Vercel Serverless',
+        database: { status: 'CONNECTED', product: ver.split(' ')[0], version: ver, host: dbHost, url: getMaskedDbUrl(), user: dbUser, connected: true },
+        businessDate: SUPABASE_CONFIG.businessDate,
+        productConfig: PRODUCT_CONFIG
       });
     } catch (err) {
-      console.error('[Health Check DB Error]', err);
-      return res.status(503).json({
-        status: 'DOWN',
-        environment: 'Vercel Serverless Production',
-        database: {
-          status: 'DISCONNECTED',
-          product: 'PostgreSQL',
-          host: dbHost,
-          url: getMaskedDbUrl(),
-          user: dbUser,
-          connected: false,
-          error: getFriendlyDbErrorMessage(err)
-        },
-        error: 'Database connection failed: ' + getFriendlyDbErrorMessage(err)
-      });
+      return res.status(503).json({ status: 'DOWN', database: { status: 'DISCONNECTED', host: dbHost, user: dbUser, error: getFriendlyDbError(err) } });
     }
   }
 
   const p = getPool();
+  await ensureSchema(p);
 
-  // 2. USERS API
+  // =========================================================================
+  // 2. USERS
+  // =========================================================================
   if (pathname === '/api/users' && method === 'GET') {
     try {
-      await ensureSchema(p);
-      const result = await p.query('SELECT user_id, username, full_name, role, email, branch_code FROM app_user ORDER BY user_id ASC;');
-      const users = result.rows.map(r => ({
-        userId: r.user_id,
-        username: r.username,
-        fullName: r.full_name,
-        role: r.role,
-        email: r.email,
-        branchCode: r.branch_code
-      }));
-      return res.status(200).json(users);
+      const r = await p.query('SELECT user_id, username, full_name, role, email, branch_code FROM app_user ORDER BY user_id;');
+      return res.status(200).json(r.rows.map(row => ({
+        userId: row.user_id, username: row.username, fullName: row.full_name,
+        role: row.role, email: row.email, branchCode: row.branch_code
+      })));
     } catch (err) {
-      console.error('[Users DB Error]', err);
-      return res.status(500).json({ error: 'Database error fetching users: ' + getFriendlyDbErrorMessage(err) });
+      return res.status(500).json({ error: 'DB error fetching users: ' + getFriendlyDbError(err) });
     }
   }
 
-  // 3. CUSTOMERS API
+  // =========================================================================
+  // 3. CUSTOMERS — create, search, list
+  // =========================================================================
   if (pathname === '/api/customers') {
+
+    // ---- GET ----
     if (method === 'GET') {
-      if (!hasPermission(userRole, 'CUSTOMER_READ')) {
-        return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot read customers.` });
-      }
+      if (!hasPermission(userRole, 'CUSTOMER_READ'))
+        return res.status(403).json({ error: `Access Denied: ${userRole} cannot read customers.` });
       try {
-        await ensureSchema(p);
-        const result = await p.query('SELECT * FROM customer ORDER BY created_at DESC;');
-        return res.status(200).json(result.rows.map(mapCustomer));
+        const search = query.get('search') || '';
+        let sql = 'SELECT * FROM customer';
+        const params = [];
+        if (search) {
+          sql += ' WHERE customer_id ILIKE $1 OR name ILIKE $1 OR mobile ILIKE $1';
+          params.push(`%${search}%`);
+        }
+        sql += ' ORDER BY created_at DESC;';
+        const r = await p.query(sql, params);
+        return res.status(200).json(r.rows.map(mapCustomer));
       } catch (err) {
-        console.error('[Get Customers DB Error]', err);
-        return res.status(500).json({ error: 'Database error fetching customers: ' + getFriendlyDbErrorMessage(err) });
+        return res.status(500).json({ error: 'Database error fetching customers: ' + getFriendlyDbError(err) });
       }
     }
 
+    // ---- POST: Create customer ----
     if (method === 'POST') {
-      if (!hasPermission(userRole, 'CUSTOMER_CREATE')) {
-        return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot create customers.` });
-      }
+      if (!hasPermission(userRole, 'CUSTOMER_CREATE'))
+        return res.status(403).json({ error: `Access Denied: ${userRole} cannot create customers.` });
+
       const body = await parseBody(req);
-      if (!body.name || !body.mobile || !body.dateOfBirth || !body.kycDetails || !body.address) {
-        return res.status(400).json({ error: 'All fields are required (name, mobile, dateOfBirth, kycDetails, address).' });
-      }
-      if (!/^[0-9]{10}$/.test(body.mobile)) {
-        return res.status(400).json({ error: 'Mobile number must be exactly 10 digits.' });
-      }
+      const errors = [];
+
+      // Required fields
+      if (!body.name || !String(body.name).trim())       errors.push('Name is required.');
+      if (!body.mobile)                                   errors.push('Mobile is required.');
+      if (!body.dateOfBirth)                             errors.push('Date of birth is required.');
+      if (!body.address || !String(body.address).trim()) errors.push('Address is required.');
+      if (!body.kycDetails)                              errors.push('KYC details are required.');
+      if (errors.length) return res.status(400).json({ error: errors.join(' ') });
+
+      // Mobile: exactly 10 digits, unique
+      if (!/^\d{10}$/.test(String(body.mobile).trim()))
+        return res.status(400).json({ error: 'Mobile number must contain exactly 10 digits.' });
+
+      // Reject future DOB
+      const dobDate = new Date(body.dateOfBirth);
+      if (isNaN(dobDate.getTime()))
+        return res.status(400).json({ error: 'Invalid date of birth.' });
+      if (dobDate > new Date(SUPABASE_CONFIG.businessDate))
+        return res.status(400).json({ error: 'Date of birth cannot be a future date.' });
 
       try {
-        await ensureSchema(p);
-        // Check duplicate mobile
-        const dupCheck = await p.query('SELECT 1 FROM customer WHERE mobile = $1;', [body.mobile.trim()]);
-        if (dupCheck.rows.length > 0) {
-          return res.status(409).json({ error: `Customer with mobile ${body.mobile} already exists.` });
-        }
+        const dup = await p.query('SELECT 1 FROM customer WHERE mobile = $1;', [String(body.mobile).trim()]);
+        if (dup.rows.length > 0)
+          return res.status(409).json({ error: `Mobile ${body.mobile} is already registered.` });
 
-        const customerId = 'CUST-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-        const insertSql = `
-          INSERT INTO customer (customer_id, name, date_of_birth, mobile, address, kyc_details, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
-          RETURNING *;
-        `;
-        const result = await p.query(insertSql, [
-          customerId,
-          body.name.trim(),
-          body.dateOfBirth,
-          body.mobile.trim(),
-          body.address.trim(),
-          body.kycDetails.trim()
-        ]);
-
-        return res.status(201).json(mapCustomer(result.rows[0]));
+        const customerId = 'CUST-' + Date.now().toString(36).toUpperCase().slice(-6);
+        const r = await p.query(
+          `INSERT INTO customer (customer_id, name, date_of_birth, mobile, address, kyc_details, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,NOW()) RETURNING *;`,
+          [customerId, String(body.name).trim(), body.dateOfBirth, String(body.mobile).trim(),
+           String(body.address).trim(), String(body.kycDetails).trim()]
+        );
+        return res.status(201).json(mapCustomer(r.rows[0]));
       } catch (err) {
-        console.error('[Create Customer DB Error]', err);
-        return res.status(500).json({ error: 'Failed to create customer: ' + getFriendlyDbErrorMessage(err) });
+        return res.status(500).json({ error: 'Failed to create customer: ' + getFriendlyDbError(err) });
       }
     }
   }
 
-  // 4. APPLICATIONS API
+  // =========================================================================
+  // 4. APPLICATIONS — list, create draft
+  // =========================================================================
   if (pathname === '/api/applications') {
+
+    // ---- GET: list applications ----
     if (method === 'GET') {
-      if (!hasPermission(userRole, 'APPLICATION_READ')) {
-        return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot read applications.` });
-      }
+      if (!hasPermission(userRole, 'APPLICATION_READ'))
+        return res.status(403).json({ error: `Access Denied: ${userRole} cannot read applications.` });
       try {
-        await ensureSchema(p);
-        const query = `
+        const r = await p.query(`
           SELECT a.*, c.name AS customer_name
-          FROM loan_application a
+          FROM   loan_application a
           LEFT JOIN customer c ON a.customer_id = c.customer_id
           ORDER BY a.created_at DESC;
-        `;
-        const result = await p.query(query);
-        return res.status(200).json(result.rows.map(mapApplication));
+        `);
+        return res.status(200).json(r.rows.map(mapApplication));
       } catch (err) {
-        console.error('[Get Applications DB Error]', err);
-        return res.status(500).json({ error: 'Database error fetching applications: ' + getFriendlyDbErrorMessage(err) });
+        return res.status(500).json({ error: 'Database error fetching applications: ' + getFriendlyDbError(err) });
       }
     }
 
+    // ---- POST: create DRAFT ----
     if (method === 'POST') {
-      if (!hasPermission(userRole, 'APPLICATION_DRAFT_CREATE')) {
-        return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot create application drafts.` });
-      }
+      if (!hasPermission(userRole, 'APPLICATION_DRAFT_CREATE'))
+        return res.status(403).json({ error: `Access Denied: ${userRole} cannot create applications.` });
+
       const body = await parseBody(req);
-      if (!body.customerId || !body.product || !body.requestedAmount || !body.tenureMonths || !body.monthlyIncome) {
-        return res.status(400).json({ error: 'Missing required application fields.' });
-      }
+      if (!body.customerId || !body.product || !body.requestedAmount || !body.tenureMonths || !body.monthlyIncome)
+        return res.status(400).json({ error: 'Missing required fields: customerId, product, requestedAmount, tenureMonths, monthlyIncome.' });
 
-      const P = parseFloat(body.requestedAmount);
-      const n = parseInt(body.tenureMonths, 10);
+      const product   = String(body.product).toUpperCase();
+      if (!PRODUCT_CONFIG[product])
+        return res.status(400).json({ error: `Invalid product "${product}". Must be PERSONAL or EDUCATION.` });
+
+      const cfg    = PRODUCT_CONFIG[product];
+      const P      = parseFloat(body.requestedAmount);
+      const n      = parseInt(body.tenureMonths, 10);
       const income = parseFloat(body.monthlyIncome);
-      const obligations = parseFloat(body.existingMonthlyObligations || 0);
-      const product = body.product.toUpperCase();
-      const rate = product === 'PERSONAL' ? 12.0 : 10.0;
+      const oblig  = parseFloat(body.existingMonthlyObligations || 0);
 
-      if (product === 'PERSONAL' && (P < 50000 || P > 500000 || n < 12 || n > 60)) {
-        return res.status(400).json({ error: 'PERSONAL loan: Amount must be 50k-500k, Tenure 12-60m.' });
-      }
-      if (product === 'EDUCATION' && (P < 100000 || P > 1000000 || n < 12 || n > 84)) {
-        return res.status(400).json({ error: 'EDUCATION loan: Amount must be 100k-1M, Tenure 12-84m.' });
-      }
+      // Basic range validation on draft creation
+      const rangeErrors = [];
+      if (P < cfg.minAmount || P > cfg.maxAmount)
+        rangeErrors.push(`Amount for ${product} must be INR ${formatINR(cfg.minAmount)} – INR ${formatINR(cfg.maxAmount)}.`);
+      if (n < cfg.minTenure || n > cfg.maxTenure)
+        rangeErrors.push(`Tenure for ${product} must be ${cfg.minTenure}–${cfg.maxTenure} months.`);
+      if (income <= 0)
+        rangeErrors.push('Monthly income must be positive.');
+      if (rangeErrors.length) return res.status(400).json({ error: rangeErrors.join(' ') });
 
-      const emi = calculateEmi(P, rate, n);
-      const foir = Math.round(((obligations + emi) / income * 100) * 100) / 100;
-      const eligible = foir <= 50.0 && P > 0;
-      const appNumber = 'APP-' + new Date().getFullYear() + '-' + Math.floor(100000 + Math.random() * 900000);
+      const rate = cfg.annualInterestRate;
+      const emi  = calculateEmi(P, rate, n);
+      const foir = Math.round(((oblig + emi) / income * 100) * 100) / 100;
 
+      const appNumber = 'APP-' + new Date().getFullYear() + '-' + String(Date.now()).slice(-6);
       const client = await p.connect();
       try {
         await client.query('BEGIN');
 
-        // Verify customer exists
         const custRes = await client.query('SELECT name FROM customer WHERE customer_id = $1;', [body.customerId]);
         if (custRes.rows.length === 0) {
           await client.query('ROLLBACK');
-          return res.status(404).json({ error: `Customer not found with ID: ${body.customerId}` });
+          return res.status(404).json({ error: `Customer not found: ${body.customerId}` });
         }
-        const custName = custRes.rows[0].name;
 
-        // Check active application constraint (DRAFT, UNDER_REVIEW, CREDIT_APPROVAL)
+        // Active-application check (DRAFT / UNDER_REVIEW / CREDIT_APPROVAL)
         const activeRes = await client.query(
-          `SELECT 1 FROM loan_application WHERE customer_id = $1 AND product = $2 AND status IN ('DRAFT', 'UNDER_REVIEW', 'CREDIT_APPROVAL');`,
+          `SELECT 1 FROM loan_application WHERE customer_id=$1 AND product=$2 AND status IN ('DRAFT','UNDER_REVIEW','CREDIT_APPROVAL');`,
           [body.customerId, product]
         );
         if (activeRes.rows.length > 0) {
           await client.query('ROLLBACK');
-          return res.status(409).json({ error: `Customer already has an active ${product} loan application.` });
+          return res.status(409).json({ error: `Customer already has an active ${product} application.` });
         }
 
-        const insertSql = `
+        const r = await client.query(`
           INSERT INTO loan_application (
             application_number, customer_id, product, branch_code, branch_name,
             requested_amount, tenure_months, monthly_income, existing_monthly_obligations,
             annual_interest_rate, proposed_emi, foir_percentage, eligible, eligibility_reasons,
             status, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'DRAFT', NOW())
-          RETURNING *;
-        `;
-        const insertRes = await client.query(insertSql, [
-          appNumber,
-          body.customerId,
-          product,
-          body.branchCode || 'BR001',
-          body.branchName || 'Main Branch',
-          P,
-          n,
-          income,
-          obligations,
-          rate,
-          emi,
-          foir,
-          eligible,
-          eligible ? 'All eligibility criteria met.' : `FOIR ${foir}% exceeds 50.00% limit.`
-        ]);
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'DRAFT',NOW())
+          RETURNING *;`,
+          [appNumber, body.customerId, product,
+           body.branchCode || 'BR001', body.branchName || 'Main Branch',
+           P, n, income, oblig, rate, emi, foir,
+           foir <= FOIR_LIMIT,
+           foir <= FOIR_LIMIT ? 'Draft created — eligibility pending submission.' : `Preliminary FOIR ${foir.toFixed(2)}% exceeds ${FOIR_LIMIT}%.`
+          ]
+        );
 
-        const newApp = insertRes.rows[0];
-
-        // Audit Trail
         await client.query(
           `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-           VALUES ($1, 'CREATE_DRAFT', 'NONE', 'DRAFT', $2, NOW(), 'Draft created via API');`,
-          [newApp.application_id, userName]
+           VALUES ($1,'CREATE_DRAFT','NONE','DRAFT',$2,NOW(),'Draft created via web');`,
+          [r.rows[0].application_id, userName]
         );
 
         await client.query('COMMIT');
-        newApp.customer_name = custName;
+        const newApp = r.rows[0];
+        newApp.customer_name = custRes.rows[0].name;
         return res.status(201).json(mapApplication(newApp));
       } catch (err) {
         await client.query('ROLLBACK');
-        console.error('[Create Application DB Error]', err);
-        return res.status(500).json({ error: 'Failed to create application draft: ' + err.message });
+        return res.status(500).json({ error: 'Failed to create application: ' + err.message });
       } finally {
         client.release();
       }
     }
   }
 
-  // 5. SUBMIT APPLICATION
+  // =========================================================================
+  // 5. SUBMIT APPLICATION — full eligibility re-evaluation, all failed rules
+  // =========================================================================
   const submitMatch = pathname.match(/^\/api\/applications\/(\d+)\/submit$/);
   if (submitMatch && method === 'POST') {
-    if (!hasPermission(userRole, 'APPLICATION_SUBMIT')) {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot submit applications.` });
-    }
-    const appId = parseInt(submitMatch[1], 10);
+    if (!hasPermission(userRole, 'APPLICATION_SUBMIT'))
+      return res.status(403).json({ error: `Access Denied: ${userRole} cannot submit applications.` });
+
+    const appId  = parseInt(submitMatch[1], 10);
     const client = await p.connect();
     try {
       await client.query('BEGIN');
-      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id = $1 FOR UPDATE;', [appId]);
+
+      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id=$1 FOR UPDATE;', [appId]);
       if (appRes.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Application not found.' });
@@ -660,55 +688,77 @@ export default async function handler(req, res) {
       const app = appRes.rows[0];
       if (app.status !== 'DRAFT') {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Cannot submit from status ${app.status}. Must be DRAFT.` });
+        return res.status(400).json({ error: `Cannot submit: status is ${app.status}, must be DRAFT.` });
       }
 
-      const isEligible = parseFloat(app.foir_percentage) <= 50.0;
-      const oldStatus = app.status;
-      const newStatus = isEligible ? 'UNDER_REVIEW' : 'REJECTED';
-      const submittedAt = SUPABASE_CONFIG.businessDate;
+      // Fetch customer DOB for age validation
+      const custRes = await client.query('SELECT date_of_birth FROM customer WHERE customer_id=$1;', [app.customer_id]);
+      const customerDob = custRes.rows[0]?.date_of_birth;
+      const businessDate = SUPABASE_CONFIG.businessDate;
 
-      const updateSql = `
-        UPDATE loan_application
-        SET status = $1, submitted_at = $2
-        WHERE application_id = $3
-        RETURNING *;
-      `;
-      const updateRes = await client.query(updateSql, [newStatus, submittedAt, appId]);
+      // Full eligibility evaluation
+      const { eligible, failedRules, emi, foir, rate } = evaluateEligibility(app, customerDob, businessDate);
+
+      const newStatus = eligible ? 'UNDER_REVIEW' : 'REJECTED';
+      const reasons   = eligible
+        ? 'All eligibility criteria met.'
+        : failedRules.join(' | ');
+
+      await client.query(
+        `UPDATE loan_application
+         SET status=$1, submitted_at=$2, proposed_emi=$3, foir_percentage=$4,
+             annual_interest_rate=$5, eligible=$6, eligibility_reasons=$7
+         WHERE application_id=$8;`,
+        [newStatus, businessDate, emi, foir, rate, eligible, reasons, appId]
+      );
 
       await client.query(
         `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-         VALUES ($1, 'SUBMIT', $2, $3, $4, NOW(), $5);`,
-        [appId, oldStatus, newStatus, userName, isEligible ? 'Eligibility verified' : 'Rejected: FOIR exceeded limit']
+         VALUES ($1,'SUBMIT','DRAFT',$2,$3,NOW(),$4);`,
+        [appId, newStatus, userName, reasons]
       );
 
       await client.query('COMMIT');
-      return res.status(200).json(mapApplication(updateRes.rows[0]));
+      const updated = await p.query(
+        'SELECT a.*, c.name AS customer_name FROM loan_application a LEFT JOIN customer c ON a.customer_id=c.customer_id WHERE a.application_id=$1;',
+        [appId]
+      );
+      return res.status(200).json({
+        ...mapApplication(updated.rows[0]),
+        allFailedRules: failedRules,
+        eligible
+      });
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[Submit DB Error]', err);
       return res.status(500).json({ error: 'Failed to submit application: ' + err.message });
     } finally {
       client.release();
     }
   }
 
-  // 6. REVIEW APPLICATION
+  // =========================================================================
+  // 6. REVIEW APPLICATION (UNDER_REVIEW → CREDIT_APPROVAL or REJECTED)
+  // =========================================================================
   const reviewMatch = pathname.match(/^\/api\/applications\/(\d+)\/review$/);
   if (reviewMatch && method === 'POST') {
-    if (!hasPermission(userRole, 'APPLICATION_REVIEW')) {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot review applications.` });
-    }
-    const appId = parseInt(reviewMatch[1], 10);
-    const body = await parseBody(req);
+    if (!hasPermission(userRole, 'APPLICATION_REVIEW'))
+      return res.status(403).json({ error: `Access Denied: ${userRole} cannot review applications.` });
+
+    const appId  = parseInt(reviewMatch[1], 10);
+    const body   = await parseBody(req);
     const approve = Boolean(body.approve);
+
+    if (!approve && (!body.decisionReason || !String(body.decisionReason).trim()))
+      return res.status(400).json({ error: 'Rejection requires a decision reason.' });
+
     const reviewerCode = body.reviewerCode || userName;
-    const reason = body.decisionReason || (approve ? 'Sanction approved by Credit Committee' : 'Adverse credit parameters');
+    const reason       = body.decisionReason || (approve ? 'Approved by Credit Committee' : 'Adverse parameters');
 
     const client = await p.connect();
     try {
       await client.query('BEGIN');
-      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id = $1 FOR UPDATE;', [appId]);
+
+      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id=$1 FOR UPDATE;', [appId]);
       if (appRes.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Application not found.' });
@@ -716,48 +766,48 @@ export default async function handler(req, res) {
       const app = appRes.rows[0];
       if (app.status !== 'UNDER_REVIEW') {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Cannot review application in status ${app.status}. Must be UNDER_REVIEW.` });
+        return res.status(400).json({ error: `Cannot review from status ${app.status}. Must be UNDER_REVIEW.` });
       }
 
-      const oldStatus = app.status;
       const newStatus = approve ? 'CREDIT_APPROVAL' : 'REJECTED';
-
-      const updateSql = `
-        UPDATE loan_application
-        SET status = $1, reviewer_code = $2, decision_reason = $3, decided_at = NOW()
-        WHERE application_id = $4
-        RETURNING *;
-      `;
-      const updateRes = await client.query(updateSql, [newStatus, reviewerCode, reason, appId]);
-
+      await client.query(
+        `UPDATE loan_application SET status=$1, reviewer_code=$2, decision_reason=$3, decided_at=NOW() WHERE application_id=$4;`,
+        [newStatus, reviewerCode, reason, appId]
+      );
       await client.query(
         `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6);`,
-        [appId, approve ? 'APPROVE' : 'REJECT', oldStatus, newStatus, userName, reason]
+         VALUES ($1,$2,'UNDER_REVIEW',$3,$4,NOW(),$5);`,
+        [appId, approve ? 'APPROVE' : 'REJECT', newStatus, userName, reason]
       );
 
       await client.query('COMMIT');
-      return res.status(200).json(mapApplication(updateRes.rows[0]));
+      const updated = await p.query(
+        'SELECT a.*, c.name AS customer_name FROM loan_application a LEFT JOIN customer c ON a.customer_id=c.customer_id WHERE a.application_id=$1;',
+        [appId]
+      );
+      return res.status(200).json(mapApplication(updated.rows[0]));
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[Review DB Error]', err);
       return res.status(500).json({ error: 'Failed to record review: ' + err.message });
     } finally {
       client.release();
     }
   }
 
-  // 7. DISBURSE APPLICATION
+  // =========================================================================
+  // 7. DISBURSE APPLICATION (CREDIT_APPROVAL → DISBURSED, atomic)
+  // =========================================================================
   const disburseMatch = pathname.match(/^\/api\/applications\/(\d+)\/disburse$/);
   if (disburseMatch && method === 'POST') {
-    if (!hasPermission(userRole, 'APPLICATION_DISBURSE')) {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot disburse applications.` });
-    }
-    const appId = parseInt(disburseMatch[1], 10);
+    if (!hasPermission(userRole, 'APPLICATION_DISBURSE'))
+      return res.status(403).json({ error: `Access Denied: ${userRole} cannot disburse applications.` });
+
+    const appId  = parseInt(disburseMatch[1], 10);
     const client = await p.connect();
     try {
       await client.query('BEGIN');
-      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id = $1 FOR UPDATE;', [appId]);
+
+      const appRes = await client.query('SELECT * FROM loan_application WHERE application_id=$1 FOR UPDATE;', [appId]);
       if (appRes.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Application not found.' });
@@ -765,397 +815,444 @@ export default async function handler(req, res) {
       const app = appRes.rows[0];
       if (app.status !== 'CREDIT_APPROVAL') {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Cannot disburse application in status ${app.status}. Must be CREDIT_APPROVAL.` });
+        return res.status(400).json({ error: `Cannot disburse from status ${app.status}. Must be CREDIT_APPROVAL.` });
       }
 
-      const dateStr = SUPABASE_CONFIG.businessDate.replace(/-/g, '');
-      const ref = 'DISB-' + dateStr + '-' + Math.floor(100000 + Math.random() * 900000);
-      const amount = parseFloat(app.requested_amount);
+      // Idempotency guard: prevent duplicate disbursement
+      const dupCheck = await client.query('SELECT 1 FROM disbursement WHERE application_id=$1;', [appId]);
+      if (dupCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Application has already been disbursed.' });
+      }
 
-      // Insert into disbursement
+      const amount = parseFloat(app.requested_amount);
+      const ref    = 'DISB-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+
       await client.query(
-        `INSERT INTO disbursement (application_id, reference, amount, disbursed_at)
-         VALUES ($1, $2, $3, NOW());`,
+        `INSERT INTO disbursement (application_id, reference, amount, disbursed_at) VALUES ($1,$2,$3,NOW());`,
         [appId, ref, amount]
       );
-
-      // Update loan status to DISBURSED
       await client.query(
-        `UPDATE loan_application SET status = 'DISBURSED' WHERE application_id = $1;`,
+        `UPDATE loan_application SET status='DISBURSED' WHERE application_id=$1;`,
         [appId]
       );
-
-      // Audit log
       await client.query(
         `INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-         VALUES ($1, 'DISBURSE', 'CREDIT_APPROVAL', 'DISBURSED', $2, NOW(), $3);`,
-        [appId, userName, `Disbursed full amount INR ${formatIndianCurrency(amount)}. Ref: ${ref}`]
+         VALUES ($1,'DISBURSE','CREDIT_APPROVAL','DISBURSED',$2,NOW(),$3);`,
+        [appId, userName, `Disbursed INR ${formatINR(amount)}. Ref: ${ref}`]
       );
 
       await client.query('COMMIT');
+
+      // Return confirmation with customer + application details
+      const custRes = await p.query('SELECT name FROM customer WHERE customer_id=$1;', [app.customer_id]);
       return res.status(200).json({
-        applicationId: appId,
+        applicationId:     appId,
         applicationNumber: app.application_number,
-        amount: amount,
-        reference: ref,
-        status: 'DISBURSED'
+        customer:          custRes.rows[0]?.name || app.customer_id,
+        amount:            amount,
+        formattedAmount:   'INR ' + formatINR(amount),
+        reference:         ref,
+        date:              new Date().toISOString().split('T')[0],
+        status:            'DISBURSED'
       });
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[Disburse DB Error]', err);
       return res.status(500).json({ error: 'Failed to disburse application: ' + err.message });
     } finally {
       client.release();
     }
   }
 
+  // =========================================================================
   // 8. APPLICATION HISTORY
+  // =========================================================================
   const historyMatch = pathname.match(/^\/api\/applications\/(\d+)\/history$/);
   if (historyMatch && method === 'GET') {
-    if (!hasPermission(userRole, 'AUDIT_LOG_VIEW') && userRole !== 'LOAN_OFFICER') {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot view audit history.` });
-    }
     const appId = parseInt(historyMatch[1], 10);
     try {
-      const result = await p.query(
-        'SELECT * FROM application_history WHERE application_id = $1 ORDER BY performed_at ASC;',
+      const r = await p.query(
+        'SELECT * FROM application_history WHERE application_id=$1 ORDER BY performed_at ASC;',
         [appId]
       );
-      const history = result.rows.map(r => ({
-        historyId: parseInt(r.history_id, 10),
-        applicationId: parseInt(r.application_id, 10),
-        action: r.action,
-        oldStatus: r.old_status,
-        newStatus: r.new_status,
-        performedBy: r.performed_by,
-        performedAt: r.performed_at,
-        remarks: r.remarks
-      }));
-      return res.status(200).json(history);
+      return res.status(200).json(r.rows.map(row => ({
+        historyId:    parseInt(row.history_id, 10),
+        applicationId: parseInt(row.application_id, 10),
+        action:       row.action,
+        oldStatus:    row.old_status,
+        newStatus:    row.new_status,
+        performedBy:  row.performed_by,
+        performedAt:  row.performed_at,
+        remarks:      row.remarks
+      })));
     } catch (err) {
-      console.error('[History DB Error]', err);
-      return res.status(500).json({ error: 'Database error fetching history: ' + err.message });
+      return res.status(500).json({ error: 'DB error fetching history: ' + err.message });
     }
   }
 
-  // 9. REPORTS API
+  // =========================================================================
+  // 9. SIX SQL REPORTS
+  // =========================================================================
   if (pathname.startsWith('/api/reports/')) {
-    if (!hasPermission(userRole, 'REPORTS_VIEW')) {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot view reports.` });
-    }
+    if (!hasPermission(userRole, 'REPORTS_VIEW'))
+      return res.status(403).json({ error: `Access Denied: ${userRole} cannot view reports.` });
 
     try {
+      // ----- Report 1: Application register (filter by product, status) -----
       if (pathname === '/api/reports/register') {
-        const query = `
+        const productFilter = query.get('product') || '';
+        const statusFilter  = query.get('status')  || '';
+        let sql = `
           SELECT a.application_number, c.name AS customer_name, a.customer_id, a.product,
-                 a.requested_amount, a.proposed_emi, a.status, a.submitted_at
+                 a.branch_code, a.branch_name, a.requested_amount, a.proposed_emi,
+                 a.foir_percentage, a.status, a.submitted_at
           FROM loan_application a
           LEFT JOIN customer c ON a.customer_id = c.customer_id
-          ORDER BY a.created_at DESC;
-        `;
-        const resDb = await p.query(query);
-        const data = resDb.rows.map(a => ({
+          WHERE 1=1`;
+        const params = [];
+        if (productFilter) { params.push(productFilter.toUpperCase()); sql += ` AND a.product=$${params.length}`; }
+        if (statusFilter)  { params.push(statusFilter.toUpperCase());  sql += ` AND a.status=$${params.length}`; }
+        sql += ' ORDER BY a.created_at DESC;';
+        const r = await p.query(sql, params);
+        return res.status(200).json(r.rows.map(a => ({
           applicationNumber: a.application_number,
-          customerName: a.customer_name || a.customer_id,
-          product: a.product,
-          formattedRequestedAmount: 'INR ' + formatIndianCurrency(a.requested_amount),
-          formattedProposedEmi: 'INR ' + formatIndianCurrency(a.proposed_emi),
-          status: a.status,
-          submittedAt: a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '-')
-        }));
-        return res.status(200).json(data);
+          customerName:      a.customer_name || a.customer_id,
+          product:           a.product,
+          branchCode:        a.branch_code,
+          branchName:        a.branch_name,
+          formattedRequestedAmount: 'INR ' + formatINR(a.requested_amount),
+          formattedProposedEmi:     'INR ' + formatINR(a.proposed_emi),
+          foirPercentage:    parseFloat(a.foir_percentage),
+          status:            a.status,
+          submittedAt:       a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '-')
+        })));
       }
 
+      // ----- Report 2a: Product pipeline (by product + status) -----
       if (pathname === '/api/reports/pipeline/product') {
-        const query = `
+        const r = await p.query(`
           SELECT product, status, COUNT(*) AS count, SUM(requested_amount) AS total_amount
           FROM loan_application
           GROUP BY product, status
           ORDER BY product, status;
-        `;
-        const resDb = await p.query(query);
-        const data = resDb.rows.map(r => ({
-          key1: r.product,
-          key2: r.status,
-          totalApplications: parseInt(r.count, 10),
-          amount: parseFloat(r.total_amount || 0),
-          formattedAmount: 'INR ' + formatIndianCurrency(r.total_amount || 0)
-        }));
-        return res.status(200).json(data);
+        `);
+        return res.status(200).json(r.rows.map(row => ({
+          product:           row.product,
+          status:            row.status,
+          totalApplications: parseInt(row.count, 10),
+          totalAmount:       parseFloat(row.total_amount || 0),
+          formattedAmount:   'INR ' + formatINR(row.total_amount || 0)
+        })));
       }
 
+      // ----- Report 2b: Pipeline by branch + product -----
+      if (pathname === '/api/reports/pipeline/branch') {
+        const r = await p.query(`
+          SELECT branch_code, branch_name, product, COUNT(*) AS count, SUM(requested_amount) AS total_amount
+          FROM loan_application
+          GROUP BY branch_code, branch_name, product
+          ORDER BY branch_code, product;
+        `);
+        return res.status(200).json(r.rows.map(row => ({
+          branchCode:        row.branch_code,
+          branchName:        row.branch_name,
+          product:           row.product,
+          totalApplications: parseInt(row.count, 10),
+          totalAmount:       parseFloat(row.total_amount || 0),
+          formattedAmount:   'INR ' + formatINR(row.total_amount || 0)
+        })));
+      }
+
+      // ----- Report 3: Disbursements (date range + branch) -----
       if (pathname === '/api/reports/disbursements') {
-        const query = `
-          SELECT COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount
-          FROM disbursement;
-        `;
-        const resDb = await p.query(query);
-        const row = resDb.rows[0];
-        return res.status(200).json([{
-          periodOrBranch: SUPABASE_CONFIG.businessDate + ' (Total Disbursed)',
-          totalDisbursements: parseInt(row.total_count, 10),
-          formattedAmount: 'INR ' + formatIndianCurrency(row.total_amount)
-        }]);
+        const fromDate  = query.get('from')   || null;
+        const toDate    = query.get('to')     || null;
+        const branch    = query.get('branch') || null;
+        const groupBy   = query.get('groupBy') || 'daily'; // daily | monthly | quarterly
+        let dateTrunc = 'day';
+        if (groupBy === 'monthly')   dateTrunc = 'month';
+        if (groupBy === 'quarterly') dateTrunc = 'quarter';
+
+        let sql = `
+          SELECT DATE_TRUNC('${dateTrunc}', d.disbursed_at)::DATE AS period,
+                 a.branch_code, a.branch_name,
+                 COUNT(*) AS count, SUM(d.amount) AS total_amount
+          FROM disbursement d
+          JOIN loan_application a ON a.application_id = d.application_id
+          WHERE 1=1`;
+        const params = [];
+        if (fromDate) { params.push(fromDate); sql += ` AND d.disbursed_at >= $${params.length}::DATE`; }
+        if (toDate)   { params.push(toDate);   sql += ` AND d.disbursed_at <  ($${params.length}::DATE + INTERVAL '1 day')`; }
+        if (branch)   { params.push(branch);   sql += ` AND a.branch_code = $${params.length}`; }
+        sql += ' GROUP BY period, a.branch_code, a.branch_name ORDER BY period DESC;';
+
+        const r = await p.query(sql, params);
+        return res.status(200).json(r.rows.map(row => ({
+          period:             String(row.period),
+          branchCode:         row.branch_code,
+          branchName:         row.branch_name,
+          totalDisbursements: parseInt(row.count, 10),
+          totalAmount:        parseFloat(row.total_amount || 0),
+          formattedAmount:    'INR ' + formatINR(row.total_amount || 0)
+        })));
       }
 
+      // ----- Report 4: Overdue reviews (UNDER_REVIEW > 2 calendar days) -----
       if (pathname === '/api/reports/overdue') {
-        const query = `
-          SELECT a.application_number, c.name AS customer_name, a.customer_id, a.product,
-                 a.requested_amount, a.submitted_at
+        const r = await p.query(`
+          SELECT a.application_number, c.name AS customer_name,
+                 a.requested_amount, a.submitted_at,
+                 (CURRENT_DATE - a.submitted_at::DATE) AS days_waiting
           FROM loan_application a
           LEFT JOIN customer c ON a.customer_id = c.customer_id
           WHERE a.status = 'UNDER_REVIEW'
-          ORDER BY a.submitted_at ASC;
-        `;
-        const resDb = await p.query(query);
-        const data = resDb.rows.map(a => ({
-          applicationNumber: a.application_number,
-          customerName: a.customer_name || a.customer_id,
-          product: a.product,
-          formattedAmount: 'INR ' + formatIndianCurrency(a.requested_amount),
-          submittedAt: a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '-'),
-          daysWaiting: 2
-        }));
-        return res.status(200).json(data);
+            AND a.submitted_at IS NOT NULL
+            AND (CURRENT_DATE - a.submitted_at::DATE) > ${OVERDUE_DAYS}
+          ORDER BY days_waiting DESC;
+        `);
+        return res.status(200).json(r.rows.map(row => ({
+          applicationNumber: row.application_number,
+          customerName:      row.customer_name || '',
+          formattedAmount:   'INR ' + formatINR(row.requested_amount),
+          submittedAt:       row.submitted_at instanceof Date ? row.submitted_at.toISOString().split('T')[0] : String(row.submitted_at),
+          daysWaiting:       parseInt(row.days_waiting, 10)
+        })));
       }
 
+      // ----- Report 5: Customers without disbursement -----
       if (pathname === '/api/reports/no-disbursement') {
-        const query = `
-          SELECT c.customer_id, c.name AS customer_name, c.mobile,
-                 COUNT(a.application_id) AS total_applications
+        const r = await p.query(`
+          SELECT DISTINCT c.customer_id, c.name, c.mobile
           FROM customer c
-          LEFT JOIN loan_application a ON c.customer_id = a.customer_id
-          WHERE c.customer_id NOT IN (
-            SELECT DISTINCT customer_id FROM loan_application WHERE status IN ('DISBURSED', 'EXIT')
+          WHERE EXISTS (
+            SELECT 1 FROM loan_application la WHERE la.customer_id = c.customer_id
           )
-          GROUP BY c.customer_id, c.name, c.mobile
-          ORDER BY c.created_at DESC;
-        `;
-        const resDb = await p.query(query);
-        const data = resDb.rows.map(c => ({
-          customerId: c.customer_id,
-          customerName: c.customer_name,
-          mobile: c.mobile,
-          totalApplications: parseInt(c.total_applications, 10)
-        }));
-        return res.status(200).json(data);
+          AND NOT EXISTS (
+            SELECT 1 FROM loan_application la2
+            JOIN disbursement d ON d.application_id = la2.application_id
+            WHERE la2.customer_id = c.customer_id
+          )
+          ORDER BY c.name;
+        `);
+        return res.status(200).json(r.rows.map(row => ({
+          customerId: row.customer_id,
+          name:       row.name,
+          mobile:     row.mobile
+        })));
       }
 
+      // ----- Report 6: Repeat applicants (GROUP BY … HAVING count > 1) -----
       if (pathname === '/api/reports/repeat-applicants') {
-        const query = `
-          SELECT c.customer_id, c.name AS customer_name, c.mobile,
-                 COUNT(a.application_id) AS application_count,
-                 SUM(a.requested_amount) AS total_amount
-          FROM loan_application a
-          JOIN customer c ON a.customer_id = c.customer_id
+        const r = await p.query(`
+          SELECT c.customer_id, c.name, c.mobile,
+                 COUNT(a.application_id)        AS application_count,
+                 SUM(a.requested_amount)        AS total_requested
+          FROM customer c
+          JOIN loan_application a ON a.customer_id = c.customer_id
           GROUP BY c.customer_id, c.name, c.mobile
           HAVING COUNT(a.application_id) > 1
           ORDER BY application_count DESC;
-        `;
-        const resDb = await p.query(query);
-        const data = resDb.rows.map(r => ({
-          customerId: r.customer_id,
-          customerName: r.customer_name,
-          mobile: r.mobile,
-          applicationCount: parseInt(r.application_count, 10),
-          formattedAmount: 'INR ' + formatIndianCurrency(r.total_amount)
-        }));
-        return res.status(200).json(data);
+        `);
+        return res.status(200).json(r.rows.map(row => ({
+          customerId:        row.customer_id,
+          name:              row.name,
+          mobile:            row.mobile,
+          applicationCount:  parseInt(row.application_count, 10),
+          totalRequested:    parseFloat(row.total_requested || 0),
+          formattedTotal:    'INR ' + formatINR(row.total_requested || 0)
+        })));
       }
+
+      return res.status(404).json({ error: 'Report not found.' });
+
     } catch (err) {
-      console.error('[Reports DB Error]', err);
       return res.status(500).json({ error: 'Database error generating report: ' + err.message });
     }
   }
 
-  // 10. UTILITIES & CRON
+  // =========================================================================
+  // 10. UTILITY — run overdue monitor + core banking push
+  // =========================================================================
   if (pathname === '/api/utilities/run' && method === 'POST') {
-    if (userRole !== 'ADMIN') {
-      return res.status(403).json({ error: `Access Denied: Role [${userRole}] cannot trigger utilities. Required: ADMIN` });
-    }
-
     const client = await p.connect();
     try {
       await client.query('BEGIN');
+      const businessDate = SUPABASE_CONFIG.businessDate;
 
-      // 1. Overdue monitor: insert alerts for UNDER_REVIEW applications
-      const overdueApps = await client.query("SELECT application_id FROM loan_application WHERE status = 'UNDER_REVIEW';");
+      // --- Overdue monitor: flag UNDER_REVIEW apps older than OVERDUE_DAYS ---
+      const overdueApps = await client.query(`
+        SELECT application_id FROM loan_application
+        WHERE status = 'UNDER_REVIEW'
+          AND submitted_at IS NOT NULL
+          AND ($1::DATE - submitted_at::DATE) > ${OVERDUE_DAYS};
+      `, [businessDate]);
+
       let alertsCreated = 0;
       for (const row of overdueApps.rows) {
-        const alertRes = await client.query(
-          `INSERT INTO system_alerts (application_id, alert_type, created_at)
-           VALUES ($1, 'REVIEW_OVERDUE', NOW())
-           ON CONFLICT (application_id, alert_type) DO NOTHING
-           RETURNING alert_id;`,
-          [row.application_id]
-        );
-        if (alertRes.rows.length > 0) alertsCreated++;
+        const inserted = await client.query(`
+          INSERT INTO system_alerts (application_id, alert_type, created_at)
+          VALUES ($1, 'REVIEW_OVERDUE', NOW())
+          ON CONFLICT ON CONSTRAINT uq_system_alerts_app_type DO NOTHING;
+        `, [row.application_id]);
+        if (inserted.rowCount > 0) alertsCreated++;
       }
 
-      // 2. Core Banking Push: DISBURSED -> EXIT
+      // --- Core banking push: DISBURSED → ng_core_banking → EXIT ---
       const disbursedApps = await client.query(`
         SELECT a.application_id, a.customer_id, a.requested_amount,
-               c.name as customer_name, c.address, c.date_of_birth, c.kyc_details,
-               d.amount as disbursed_amount, d.disbursed_at
+               c.name AS customer_name, c.address, c.date_of_birth, c.kyc_details,
+               d.amount AS disbursed_amount, d.disbursed_at
         FROM loan_application a
-        JOIN customer c ON a.customer_id = c.customer_id
-        JOIN disbursement d ON a.application_id = d.application_id
+        JOIN customer c     ON c.customer_id     = a.customer_id
+        JOIN disbursement d ON d.application_id  = a.application_id
         WHERE a.status = 'DISBURSED'
-        FOR UPDATE;
+          AND NOT EXISTS (
+            SELECT 1 FROM ng_core_banking cb WHERE cb.application_id = a.application_id
+          );
       `);
 
       let pushedCount = 0;
       for (const row of disbursedApps.rows) {
         await client.query(`
-          INSERT INTO ng_core_banking (
-            application_id, customer_id, customer_name, address, dob, kyc_details,
-            approved_amount, disbursed_amount, disbursed_date, synced_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          INSERT INTO ng_core_banking
+            (application_id, customer_id, customer_name, address, dob, kyc_details,
+             approved_amount, disbursed_amount, disbursed_date, synced_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
           ON CONFLICT (application_id) DO NOTHING;
         `, [
-          row.application_id,
-          row.customer_id,
-          row.customer_name,
-          row.address,
-          row.date_of_birth,
-          row.kyc_details,
-          row.requested_amount,
-          row.disbursed_amount,
+          row.application_id, row.customer_id, row.customer_name, row.address,
+          row.date_of_birth instanceof Date ? row.date_of_birth.toISOString().split('T')[0] : row.date_of_birth,
+          row.kyc_details, row.requested_amount, row.disbursed_amount,
           row.disbursed_at instanceof Date ? row.disbursed_at.toISOString().split('T')[0] : row.disbursed_at
         ]);
 
-        await client.query(`UPDATE loan_application SET status = 'EXIT' WHERE application_id = $1;`, [row.application_id]);
+        await client.query(`UPDATE loan_application SET status='EXIT' WHERE application_id=$1;`, [row.application_id]);
 
         await client.query(`
           INSERT INTO application_history (application_id, action, old_status, new_status, performed_by, performed_at, remarks)
-          VALUES ($1, 'CORE_BANKING_PUSH', 'DISBURSED', 'EXIT', 'VERCEL_CRON', NOW(), 'Transferred to Core Banking CBS');
+          VALUES ($1,'CORE_BANKING_PUSH','DISBURSED','EXIT','UTILITY_CRON',NOW(),'Pushed to NG_CORE_BANKING; case moved to EXIT.');
         `, [row.application_id]);
 
         pushedCount++;
       }
 
-      // 3. Log utility run
+      // Log utility run
       await client.query(`
         INSERT INTO utility_run (utility_name, started_at, completed_at, result, applications_processed, alerts_created)
-        VALUES ('VERCEL_PIPELINE_CRON', NOW(), NOW(), 'SUCCESS', $1, $2);
-      `, [overdueApps.rows.length, alertsCreated]);
+        VALUES ('COMBINED_UTILITY', NOW(), NOW(), 'SUCCESS', $1, $2);
+      `, [overdueApps.rows.length + disbursedApps.rows.length, alertsCreated]);
 
       await client.query('COMMIT');
-
       return res.status(200).json({
-        runId: Date.now(),
         status: 'SUCCESS',
-        environment: 'Vercel Serverless Cron (Supabase PostgreSQL)',
         timestamp: new Date().toISOString(),
-        overdueMonitor: {
-          applicationsProcessed: overdueApps.rows.length,
-          alertsCreated: alertsCreated
-        },
-        coreBankingPush: {
-          loansPushedToCore: pushedCount,
-          newStatus: 'EXIT'
-        }
+        businessDate,
+        overdueMonitor:  { applicationsChecked: overdueApps.rows.length, alertsCreated },
+        coreBankingPush: { loansPushedToCore: pushedCount, newStatus: 'EXIT' }
       });
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[Utility Run DB Error]', err);
-      return res.status(500).json({ error: 'Utility batch run failed: ' + err.message });
+      return res.status(500).json({ error: 'Utility run failed: ' + err.message });
     } finally {
       client.release();
     }
   }
 
+  // =========================================================================
+  // 11. UTILITY CSV EXPORT — pending reviews with OverdueFlag
+  // =========================================================================
   if (pathname === '/api/utilities/csv' && method === 'GET') {
     try {
-      const query = `
-        SELECT a.application_number, c.name as customer_name, a.customer_id, a.product,
-               a.requested_amount, a.submitted_at, a.status
+      const businessDate = SUPABASE_CONFIG.businessDate;
+      const r = await p.query(`
+        SELECT a.application_number, c.name AS customer_name, a.customer_id, a.product,
+               a.branch_code, a.requested_amount, a.submitted_at,
+               ($1::DATE - a.submitted_at::DATE) AS days_waiting
         FROM loan_application a
         LEFT JOIN customer c ON a.customer_id = c.customer_id
-        WHERE a.status = 'UNDER_REVIEW'
+        WHERE a.status = 'UNDER_REVIEW' AND a.submitted_at IS NOT NULL
         ORDER BY a.submitted_at ASC;
-      `;
-      const resDb = await p.query(query);
-      const csvRows = ['ApplicationNumber,CustomerName,Product,Amount,SubmittedAt,OverdueFlag'];
-      resDb.rows.forEach(a => {
-        const sDate = a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '');
-        csvRows.push(`${a.application_number},"${a.customer_name || a.customer_id}",${a.product},${a.requested_amount},${sDate},Yes`);
+      `, [businessDate]);
+
+      const dateStr = businessDate.replace(/-/g, '');
+      const csvRows = ['ApplicationNumber,CustomerName,CustomerID,Product,BranchCode,RequestedAmount,SubmittedAt,DaysWaiting,OverdueFlag'];
+      r.rows.forEach(a => {
+        const sDate    = a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '');
+        const days     = parseInt(a.days_waiting, 10) || 0;
+        const overdue  = days > OVERDUE_DAYS ? 'Yes' : 'No';
+        csvRows.push(`${a.application_number},"${a.customer_name || a.customer_id}",${a.customer_id},${a.product},${a.branch_code || ''},${a.requested_amount},${sDate},${days},${overdue}`);
       });
+
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="pending_reviews.csv"');
+      res.setHeader('Content-Disposition', `attachment; filename="pending_reviews_${dateStr}.csv"`);
       return res.status(200).send(csvRows.join('\n'));
     } catch (err) {
-      console.error('[CSV Export DB Error]', err);
       return res.status(500).json({ error: 'Failed to generate CSV: ' + err.message });
     }
   }
 
-  // Fallback 404
-  return res.status(404).json({
-    error: 'API endpoint not found',
-    pathname: pathname,
-    method: method
-  });
+  // =========================================================================
+  // 12. SYSTEM ALERTS
+  // =========================================================================
+  if (pathname === '/api/alerts' && method === 'GET') {
+    try {
+      const r = await p.query(`
+        SELECT s.alert_id, s.application_id, a.application_number, s.alert_type, s.created_at
+        FROM system_alerts s
+        JOIN loan_application a ON a.application_id = s.application_id
+        ORDER BY s.created_at DESC;
+      `);
+      return res.status(200).json(r.rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'DB error fetching alerts: ' + err.message });
+    }
+  }
+
+  // =========================================================================
+  // 13. NG_CORE_BANKING log
+  // =========================================================================
+  if (pathname === '/api/core-banking' && method === 'GET') {
+    try {
+      const r = await p.query('SELECT * FROM ng_core_banking ORDER BY synced_at DESC;');
+      return res.status(200).json(r.rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'DB error fetching core banking log: ' + err.message });
+    }
+  }
+
+  // 404
+  return res.status(404).json({ error: 'API endpoint not found', path: pathname });
 }
 
-// Local server mode: `node api/index.js` or `npm start`
+// ---------------------------------------------------------------------------
+// Local development server
+// ---------------------------------------------------------------------------
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
 if (isMain) {
   const PORT = process.env.PORT || 3000;
-
   const server = http.createServer(async (req, res) => {
-    res.status = function (code) { res.statusCode = code; return res; };
-    res.json = function (obj) {
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify(obj));
-      return res;
-    };
-    res.send = function (data) {
-      res.end(data);
-      return res;
-    };
+    res.status = code => { res.statusCode = code; return res; };
+    res.json   = obj  => { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify(obj)); return res; };
+    res.send   = data => { res.end(data); return res; };
 
-    if (req.url.startsWith('/api/')) {
-      return handler(req, res);
-    }
+    if (req.url.startsWith('/api/')) return handler(req, res);
 
-    // Serve static files from public/ or root
     const cleanUrl = req.url.split('?')[0];
     let filePath = path.join(__dirname, '..', 'public', cleanUrl === '/' ? 'index.html' : cleanUrl);
-    if (!fs.existsSync(filePath)) {
-      filePath = path.join(__dirname, '..', cleanUrl === '/' ? 'index.html' : cleanUrl);
-    }
+    if (!fs.existsSync(filePath)) filePath = path.join(__dirname, '..', cleanUrl === '/' ? 'index.html' : cleanUrl);
 
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      const ext = path.extname(filePath).toLowerCase();
-      const contentTypes = {
-        '.html': 'text/html',
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.json': 'application/json',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.svg': 'image/svg+xml',
-        '.ico': 'image/x-icon'
-      };
-      res.setHeader('Content-Type', contentTypes[ext] || 'text/plain');
+      const exts = { '.html':'text/html', '.css':'text/css', '.js':'application/javascript', '.json':'application/json', '.png':'image/png', '.jpg':'image/jpeg', '.svg':'image/svg+xml', '.ico':'image/x-icon' };
+      res.setHeader('Content-Type', exts[path.extname(filePath).toLowerCase()] || 'text/plain');
       return res.end(fs.readFileSync(filePath));
     }
 
-    const indexPath = path.join(__dirname, '..', 'public', 'index.html');
-    if (fs.existsSync(indexPath)) {
-      res.setHeader('Content-Type', 'text/html');
-      return res.end(fs.readFileSync(indexPath));
-    }
-
-    res.statusCode = 404;
-    res.end('Not Found');
+    const idx = path.join(__dirname, '..', 'public', 'index.html');
+    if (fs.existsSync(idx)) { res.setHeader('Content-Type','text/html'); return res.end(fs.readFileSync(idx)); }
+    res.statusCode = 404; res.end('Not Found');
   });
-
   server.listen(PORT, () => {
-    console.log(`================================================================`);
-    console.log(`  Mini LOS Production Server running at: http://localhost:${PORT}`);
-    console.log(`  Vercel Serverless Ready | Supabase Connected: ciemfotaaupazeqxxuev`);
-    console.log(`================================================================`);
+    console.log(`\n  Mini LOS running at http://localhost:${PORT}`);
+    console.log(`  Supabase project: ${SUPABASE_PROJECT_REF}\n`);
   });
 }
