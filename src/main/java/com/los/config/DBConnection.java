@@ -60,13 +60,23 @@ public class DBConnection {
     }
 
     /**
-     * Resolves the database URL strictly checking DB_URL env var first,
+     * Resolves the database URL strictly checking DB_URL / DATABASE_URL / POSTGRES_URL env vars first,
      * falling back to config.properties 'db.url' only for local runs.
      */
     public static String getDbUrl() {
         String env = System.getenv("DB_URL");
+        if (env == null || env.trim().isEmpty()) {
+            env = System.getenv("DATABASE_URL");
+        }
+        if (env == null || env.trim().isEmpty()) {
+            env = System.getenv("POSTGRES_URL");
+        }
         if (env != null && !env.trim().isEmpty()) {
-            return env.trim();
+            String u = env.trim();
+            if (!u.startsWith("jdbc:") && u.startsWith("postgresql://")) {
+                u = "jdbc:" + u;
+            }
+            return u;
         }
         ensurePropertiesLoaded();
         String prop = localProperties.getProperty("db.url");
@@ -77,28 +87,43 @@ public class DBConnection {
     }
 
     /**
-     * Resolves the database user strictly checking DB_USER env var first,
-     * falling back to config.properties 'db.user' only for local runs.
+     * Resolves the database user strictly checking DB_USER / POSTGRES_USER env vars first,
+     * auto-qualifying for Supabase session pooler, and falling back to config.properties 'db.user'.
      */
     public static String getDbUser() {
         String env = System.getenv("DB_USER");
+        if (env == null || env.trim().isEmpty()) {
+            env = System.getenv("POSTGRES_USER");
+        }
+        String user = null;
         if (env != null && !env.trim().isEmpty()) {
-            return env.trim();
+            user = env.trim();
+        } else {
+            ensurePropertiesLoaded();
+            String prop = localProperties.getProperty("db.user");
+            if (prop != null && !prop.trim().isEmpty()) {
+                user = prop.trim();
+            } else {
+                user = "postgres.ciemfotaaupazeqxxuev";
+            }
         }
-        ensurePropertiesLoaded();
-        String prop = localProperties.getProperty("db.user");
-        if (prop != null && !prop.trim().isEmpty()) {
-            return prop.trim();
+
+        // Auto-fix: Supabase pooler requires username in the format postgres.<projectRef>
+        if ("postgres".equalsIgnoreCase(user) && getDatabaseHost().contains("pooler.supabase.com")) {
+            return "postgres.ciemfotaaupazeqxxuev";
         }
-        return "postgres.ciemfotaaupazeqxxuev";
+        return user;
     }
 
     /**
-     * Resolves the database password strictly checking DB_PASSWORD env var first,
+     * Resolves the database password strictly checking DB_PASSWORD / POSTGRES_PASSWORD env vars first,
      * falling back to config.properties 'db.password' only for local runs.
      */
     public static String getDbPassword() {
         String env = System.getenv("DB_PASSWORD");
+        if (env == null || env.trim().isEmpty()) {
+            env = System.getenv("POSTGRES_PASSWORD");
+        }
         if (env != null && !env.trim().isEmpty()) {
             return env.trim();
         }

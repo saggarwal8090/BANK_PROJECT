@@ -45,14 +45,14 @@ function loadConfigProperties() {
 const localProps = loadConfigProperties();
 
 // Database Configuration - Environment Variables strictly take precedence
-const rawDbUrl = process.env.DB_URL || localProps['db.url'] || 'jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require';
-const dbUser = process.env.DB_USER || localProps['db.user'] || 'postgres.ciemfotaaupazeqxxuev';
-const dbPassword = process.env.DB_PASSWORD || localProps['db.password'] || 'postgres';
+const rawDbUrl = process.env.DB_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL || localProps['db.url'] || 'jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require';
 
 // Clean JDBC URL prefix for node-postgres
 const cleanDbUrl = rawDbUrl.replace(/^jdbc:/, '');
 
-// Parse Host, Port, and Database
+// Parse Host, Port, Database, User, and Password from URL if present
+let urlUser = '';
+let urlPassword = '';
 let dbHost = 'aws-0-ap-southeast-1.pooler.supabase.com';
 let dbPort = 5432;
 let dbDatabase = 'postgres';
@@ -62,13 +62,37 @@ try {
   dbHost = urlObj.hostname || dbHost;
   dbPort = parseInt(urlObj.port || '5432', 10);
   dbDatabase = urlObj.pathname.replace(/^\//, '') || 'postgres';
+  if (urlObj.username) urlUser = decodeURIComponent(urlObj.username);
+  if (urlObj.password) urlPassword = decodeURIComponent(urlObj.password);
 } catch (e) {
-  const m = cleanDbUrl.match(/postgresql:\/\/([^:/]+)(?::(\d+))?\/([^?]+)/);
+  const m = cleanDbUrl.match(/postgresql:\/\/(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?\/([^?]+)/);
   if (m) {
-    dbHost = m[1];
-    dbPort = parseInt(m[2] || '5432', 10);
-    dbDatabase = m[3] || 'postgres';
+    if (m[1]) urlUser = decodeURIComponent(m[1]);
+    if (m[2]) urlPassword = decodeURIComponent(m[2]);
+    dbHost = m[3];
+    dbPort = parseInt(m[4] || '5432', 10);
+    dbDatabase = m[5] || 'postgres';
   }
+}
+
+// User & Password: Env vars take highest priority, then URL components, then properties, then defaults
+let dbUser = process.env.DB_USER || process.env.POSTGRES_USER || urlUser || localProps['db.user'] || 'postgres.ciemfotaaupazeqxxuev';
+let dbPassword = process.env.DB_PASSWORD || process.env.POSTGRES_PASSWORD || urlPassword || localProps['db.password'] || 'postgres';
+
+// Auto-fix for Supabase Session Pooler (port 5432 / 6543):
+// When connecting to pooler.supabase.com, Supabase requires username in format: postgres.<project-ref>
+// If configured as just "postgres", auto-qualify with project reference to prevent auth routing failures.
+const SUPABASE_PROJECT_REF = 'ciemfotaaupazeqxxuev';
+if (dbHost.includes('pooler.supabase.com') && dbUser === 'postgres') {
+  dbUser = `postgres.${SUPABASE_PROJECT_REF}`;
+}
+
+function getFriendlyDbErrorMessage(err) {
+  if (!err || !err.message) return 'Unknown database error';
+  if (err.message.includes('password authentication failed')) {
+    return `Password authentication failed for user "${dbUser}" on ${dbHost}. Please verify that DB_PASSWORD in Vercel is set to your real Supabase database password (not the placeholder 'postgres'). You can reset your password in Supabase Dashboard -> Project Settings -> Database -> Database Password.`;
+  }
+  return err.message;
 }
 
 function getMaskedDbUrl() {
@@ -390,9 +414,9 @@ export default async function handler(req, res) {
           url: getMaskedDbUrl(),
           user: dbUser,
           connected: false,
-          error: err.message
+          error: getFriendlyDbErrorMessage(err)
         },
-        error: 'Database connection failed: ' + err.message
+        error: 'Database connection failed: ' + getFriendlyDbErrorMessage(err)
       });
     }
   }
@@ -415,7 +439,7 @@ export default async function handler(req, res) {
       return res.status(200).json(users);
     } catch (err) {
       console.error('[Users DB Error]', err);
-      return res.status(500).json({ error: 'Database error fetching users: ' + err.message });
+      return res.status(500).json({ error: 'Database error fetching users: ' + getFriendlyDbErrorMessage(err) });
     }
   }
 
@@ -431,7 +455,7 @@ export default async function handler(req, res) {
         return res.status(200).json(result.rows.map(mapCustomer));
       } catch (err) {
         console.error('[Get Customers DB Error]', err);
-        return res.status(500).json({ error: 'Database error fetching customers: ' + err.message });
+        return res.status(500).json({ error: 'Database error fetching customers: ' + getFriendlyDbErrorMessage(err) });
       }
     }
 
@@ -473,7 +497,7 @@ export default async function handler(req, res) {
         return res.status(201).json(mapCustomer(result.rows[0]));
       } catch (err) {
         console.error('[Create Customer DB Error]', err);
-        return res.status(500).json({ error: 'Failed to create customer: ' + err.message });
+        return res.status(500).json({ error: 'Failed to create customer: ' + getFriendlyDbErrorMessage(err) });
       }
     }
   }
@@ -496,7 +520,7 @@ export default async function handler(req, res) {
         return res.status(200).json(result.rows.map(mapApplication));
       } catch (err) {
         console.error('[Get Applications DB Error]', err);
-        return res.status(500).json({ error: 'Database error fetching applications: ' + err.message });
+        return res.status(500).json({ error: 'Database error fetching applications: ' + getFriendlyDbErrorMessage(err) });
       }
     }
 
