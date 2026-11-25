@@ -391,6 +391,12 @@ async function ensureSchema(p) {
       CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type)
     );
 
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_system_alerts_app_type' AND conrelid='system_alerts'::regclass) THEN
+        ALTER TABLE system_alerts ADD CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type);
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS utility_run (
       run_id                 BIGSERIAL PRIMARY KEY,
       utility_name           VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR',
@@ -401,6 +407,14 @@ async function ensureSchema(p) {
       alerts_created         INT NOT NULL DEFAULT 0,
       error_message          TEXT
     );
+
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS utility_name           VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR';
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS started_at             TIMESTAMP WITH TIME ZONE;
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS completed_at           TIMESTAMP WITH TIME ZONE;
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS result                 VARCHAR(30);
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS applications_processed INT NOT NULL DEFAULT 0;
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS alerts_created         INT NOT NULL DEFAULT 0;
+    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS error_message          TEXT;
 
     CREATE TABLE IF NOT EXISTS ng_core_banking (
       core_id          BIGSERIAL PRIMARY KEY,
@@ -415,6 +429,39 @@ async function ensureSchema(p) {
       disbursed_date   DATE NOT NULL,
       synced_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Migration: add missing columns / drop legacy NOT NULL on pre-existing ng_core_banking table
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_id      VARCHAR(15);
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_name    VARCHAR(100);
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS address          TEXT;
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS dob              DATE;
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS kyc_details      TEXT;
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS approved_amount  NUMERIC(15,2);
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_amount NUMERIC(15,2);
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_date   DATE;
+    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS synced_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+    DO $$
+    DECLARE
+      col RECORD;
+    BEGIN
+      FOR col IN
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'ng_core_banking'
+          AND is_nullable = 'NO'
+          AND column_name NOT IN ('core_id', 'id', 'application_id', 'customer_id', 'customer_name', 'address', 'dob', 'kyc_details', 'approved_amount', 'disbursed_amount', 'disbursed_date', 'synced_at')
+      LOOP
+        EXECUTE format('ALTER TABLE ng_core_banking ALTER COLUMN %I DROP NOT NULL', col.column_name);
+      END LOOP;
+    END $$;
+
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ng_core_banking_application_id_key' AND conrelid='ng_core_banking'::regclass) THEN
+        ALTER TABLE ng_core_banking ADD CONSTRAINT ng_core_banking_application_id_key UNIQUE (application_id);
+      END IF;
+    END $$;
 
     CREATE TABLE IF NOT EXISTS app_user (
       user_id     BIGSERIAL PRIMARY KEY,
