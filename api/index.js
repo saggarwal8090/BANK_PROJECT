@@ -348,6 +348,20 @@ async function ensureSchema(p) {
     ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS reference VARCHAR(50);
     ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount    NUMERIC(15,2);
     DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'disbursement' AND column_name = 'disbursed_amount'
+      ) THEN
+        ALTER TABLE disbursement ALTER COLUMN disbursed_amount DROP NOT NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'disbursement' AND column_name = 'disbursement_reference'
+      ) THEN
+        ALTER TABLE disbursement ALTER COLUMN disbursement_reference DROP NOT NULL;
+      END IF;
+    END $$;
+    DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_reference_key' AND conrelid='disbursement'::regclass) THEN
         ALTER TABLE disbursement ADD CONSTRAINT disbursement_reference_key UNIQUE (reference);
       END IF;
