@@ -37,6 +37,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -219,33 +220,48 @@ public class LosHttpHandler implements HttpHandler {
     }
 
     private void handleHealth(HttpExchange exchange) throws IOException {
-        boolean dbOk = DatabaseConfig.testConnection();
+        String dbProduct = "Unknown";
+        String dbVersion = "Unknown";
+        String dbHost = com.los.config.DBConnection.getDatabaseHost();
+        String maskedUrl = com.los.config.DBConnection.getMaskedUrl();
+        boolean dbOk = false;
+        String dbError = null;
+
+        try (Connection conn = com.los.config.DBConnection.getConnection()) {
+            dbOk = conn != null && conn.isValid(5);
+            if (conn != null) {
+                dbProduct = com.los.config.DBConnection.getDatabaseProductName(conn);
+                dbVersion = com.los.config.DBConnection.getDatabaseProductVersion(conn);
+            }
+        } catch (SQLException e) {
+            dbOk = false;
+            dbError = e.getMessage();
+        }
+
+        int statusCode = dbOk ? 200 : 503;
         String json = String.format(
-            "{\"status\":\"%s\",\"database\":\"%s\",\"businessDate\":\"%s\",\"serverPort\":%d,\"supabase\":{\"url\":\"%s\",\"projectRef\":\"ciemfotaaupazeqxxuev\",\"status\":\"LIVE\",\"publishableKeyConfigured\":%b}}",
-            dbOk ? "UP" : "DEGRADED",
-            dbOk ? "CONNECTED" : "CONNECTED",
+            "{\"status\":\"%s\",\"database\":{\"connected\":%b,\"product\":\"%s\",\"version\":\"%s\",\"host\":\"%s\",\"url\":\"%s\",\"user\":\"%s\",\"error\":%s},\"businessDate\":\"%s\",\"serverPort\":%d,\"supabase\":{\"url\":\"%s\",\"projectRef\":\"ciemfotaaupazeqxxuev\"}}",
+            dbOk ? "UP" : "DOWN",
+            dbOk,
+            JsonUtils.escape(dbProduct),
+            JsonUtils.escape(dbVersion),
+            JsonUtils.escape(dbHost),
+            JsonUtils.escape(maskedUrl),
+            JsonUtils.escape(com.los.config.DBConnection.getDbUser()),
+            dbError != null ? "\"" + JsonUtils.escape(dbError) + "\"" : "null",
             config.getBusinessDate().toString(),
             config.getServerPort(),
-            config.getSupabaseUrl(),
-            !config.getSupabasePublishableKey().isEmpty()
+            config.getSupabaseUrl()
         );
-        sendJsonResponse(exchange, 200, json);
+        sendJsonResponse(exchange, statusCode, json);
     }
 
     private void handleListUsers(HttpExchange exchange) throws IOException {
         try (Connection conn = DatabaseConfig.getConnection()) {
             List<AppUser> users = userDAO.findAll(conn);
             sendJsonResponse(exchange, 200, JsonUtils.userListToJson(users));
-        } catch (Exception e) {
-            // Return default seed users if DB offline
-            List<AppUser> fallback = List.of(
-                new AppUser("officer_ramesh", "Ramesh Sharma", UserRole.LOAN_OFFICER, "ramesh@losbank.in", "BR001"),
-                new AppUser("credit_priya", "Priya Iyer", UserRole.CREDIT_OFFICER, "priya@losbank.in", "BR001"),
-                new AppUser("treasury_amit", "Amit Patel", UserRole.DISBURSEMENT_OFFICER, "amit@losbank.in", "BR001"),
-                new AppUser("admin_super", "Rajesh Gupta (Admin)", UserRole.ADMIN, "admin@losbank.in", "HQ001"),
-                new AppUser("auditor_neha", "Neha Kulkarni", UserRole.AUDITOR, "neha@losbank.in", "AUDIT01")
-            );
-            sendJsonResponse(exchange, 200, JsonUtils.userListToJson(fallback));
+        } catch (SQLException e) {
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error fetching users: " + JsonUtils.escape(e.getMessage()) + "\"}");
         }
     }
 

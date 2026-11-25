@@ -30,36 +30,27 @@ public class DatabaseConfig {
 
     /**
      * Obtains a new standard JDBC Connection using configured credentials.
+     * Strictly uses DBConnection factory with environment variable precedence.
      *
      * @return active java.sql.Connection
      * @throws SQLException if a connection cannot be established
      */
     public static Connection getConnection() throws SQLException {
-        AppConfig config = AppConfig.getInstance();
-        DriverManager.setLoginTimeout(3);
-        return DriverManager.getConnection(config.getDbUrl(), config.getDbUser(), config.getDbPassword());
+        return DBConnection.getConnection();
     }
 
     /**
-     * Tests the database connectivity with fast failover.
-     * Checks JDBC connection first; if remote pooler is authenticating, verifies Supabase Cloud REST endpoint.
+     * Tests the database connectivity.
+     * Strictly verifies live PostgreSQL JDBC connectivity without silent fallbacks.
      *
      * @return true if connection succeeded, false otherwise.
      */
     public static boolean testConnection() {
         try {
-            DriverManager.setLoginTimeout(3);
-            try (Connection conn = getConnection()) {
-                return conn != null && conn.isValid(3);
-            }
-        } catch (Exception e) {
-            // Check Supabase Cloud Live status via SupabaseClient
-            try {
-                SupabaseClient supabase = new SupabaseClient();
-                return supabase.testConnection();
-            } catch (Exception ignored) {
-                return false;
-            }
+            return DBConnection.verifyConnection();
+        } catch (SQLException e) {
+            System.err.println("[DatabaseConfig] PostgreSQL JDBC connection test failed: " + e.getMessage());
+            return false;
         }
     }
 

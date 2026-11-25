@@ -39,6 +39,7 @@ public class VerificationSuite {
         testNonShortCircuitingRuleEngine();
         testRoleBasedAccessControl();
         testSupabaseConfiguration();
+        testDBConnectionAndUtilityService();
 
         System.out.println("================================================================================");
         System.out.printf("   TEST SUITE EXECUTION SUMMARY: %d PASSED | %d FAILED%n", passed, failed);
@@ -236,6 +237,23 @@ public class VerificationSuite {
         assertCondition("Supabase Publishable Key loaded", cfg.getSupabasePublishableKey().startsWith("sb_publishable_"));
         assertCondition("Supabase Secret Key loaded", cfg.getSupabaseSecretKey() != null && !cfg.getSupabaseSecretKey().isEmpty());
         assertCondition("Supabase JWKS URL configured", cfg.getSupabaseJwksUrl().contains("jwks.json"));
+    }
+
+    private static void testDBConnectionAndUtilityService() {
+        String dbUrl = com.los.config.DBConnection.getDbUrl();
+        assertCondition("DBConnection: Resolves JDBC URL", dbUrl != null && dbUrl.startsWith("jdbc:postgresql://"), "Got: " + dbUrl);
+
+        String dbUser = com.los.config.DBConnection.getDbUser();
+        assertCondition("DBConnection: Resolves DB User", dbUser != null && !dbUser.isEmpty(), "Got: " + dbUser);
+
+        String host = com.los.config.DBConnection.getDatabaseHost();
+        assertCondition("DBConnection: Extracts host from DB_URL", host != null && !host.equals("unknown-host"), "Got host: " + host);
+
+        String masked = com.los.config.DBConnection.getMaskedUrl();
+        assertCondition("DBConnection: Masks password in URL", !masked.contains("password=postgres"), "Got: " + masked);
+
+        com.los.service.UtilityService utilityService = new com.los.service.UtilityService();
+        assertCondition("UtilityService: Instantiated successfully", utilityService != null);
     }
 
     private static Customer createCustomer(LocalDate dob) {

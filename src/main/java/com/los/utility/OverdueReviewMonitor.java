@@ -69,35 +69,43 @@ public class OverdueReviewMonitor implements Runnable {
         int alertsCreated = 0;
 
         try (Connection conn = DatabaseConfig.getConnection()) {
-            // Find all applications currently UNDER_REVIEW
-            List<LoanApplication> underReviewApps = applicationDAO.filterApplications(conn, null, ApplicationStatus.UNDER_REVIEW);
-            processedCount = underReviewApps.size();
+            conn.setAutoCommit(false);
+            try {
+                // Find all applications currently UNDER_REVIEW
+                List<LoanApplication> underReviewApps = applicationDAO.filterApplications(conn, null, ApplicationStatus.UNDER_REVIEW);
+                processedCount = underReviewApps.size();
 
-            // Find strictly overdue ones (> thresholdDays)
-            List<OverdueReviewItem> overdueItems = applicationDAO.findOverdueReviews(conn, businessDate, thresholdDays);
+                // Find strictly overdue ones (> thresholdDays)
+                List<OverdueReviewItem> overdueItems = applicationDAO.findOverdueReviews(conn, businessDate, thresholdDays);
 
-            // Insert idempotent alerts for overdue apps
-            for (OverdueReviewItem item : overdueItems) {
-                SystemAlert alert = new SystemAlert(item.getApplicationId(), "REVIEW_OVERDUE");
-                boolean inserted = alertDAO.insertIdempotent(conn, alert);
-                if (inserted) {
-                    alertsCreated++;
+                // Insert idempotent alerts for overdue apps
+                for (OverdueReviewItem item : overdueItems) {
+                    SystemAlert alert = new SystemAlert(item.getApplicationId(), "REVIEW_OVERDUE");
+                    boolean inserted = alertDAO.insertIdempotent(conn, alert);
+                    if (inserted) {
+                        alertsCreated++;
+                    }
                 }
+
+                // Generate CSV of all pending reviews with OverdueFlag
+                generateCsvReport(underReviewApps, businessDate, thresholdDays);
+
+                runRecord.setCompletedAt(OffsetDateTime.now());
+                runRecord.setResult(UtilityResult.SUCCESS);
+                runRecord.setApplicationsProcessed(processedCount);
+                runRecord.setAlertsCreated(alertsCreated);
+                runRecord.setErrorMessage(null);
+
+                runDAO.insert(conn, runRecord);
+                conn.commit();
+                System.out.printf("[OverdueReviewMonitor] Completed. Processed: %d, Overdue Alerts Created: %d%n",
+                        processedCount, alertsCreated);
+            } catch (Exception ex) {
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
             }
-
-            // Generate CSV of all pending reviews with OverdueFlag
-            generateCsvReport(underReviewApps, businessDate, thresholdDays);
-
-            runRecord.setCompletedAt(OffsetDateTime.now());
-            runRecord.setResult(UtilityResult.SUCCESS);
-            runRecord.setApplicationsProcessed(processedCount);
-            runRecord.setAlertsCreated(alertsCreated);
-            runRecord.setErrorMessage(null);
-
-            runDAO.insert(conn, runRecord);
-            System.out.printf("[OverdueReviewMonitor] Completed. Processed: %d, Overdue Alerts Created: %d%n",
-                    processedCount, alertsCreated);
-
         } catch (Exception e) {
             System.err.println("[OverdueReviewMonitor] Execution failed: " + e.getMessage());
             runRecord.setCompletedAt(OffsetDateTime.now());
@@ -107,7 +115,15 @@ public class OverdueReviewMonitor implements Runnable {
             runRecord.setErrorMessage(e.getMessage());
 
             try (Connection conn = DatabaseConfig.getConnection()) {
-                runDAO.insert(conn, runRecord);
+                conn.setAutoCommit(false);
+                try {
+                    runDAO.insert(conn, runRecord);
+                    conn.commit();
+                } catch (Exception rollbackEx) {
+                    conn.rollback();
+                } finally {
+                    conn.setAutoCommit(true);
+                }
             } catch (Exception ignored) {
             }
         }
