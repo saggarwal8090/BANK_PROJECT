@@ -344,34 +344,6 @@ async function ensureSchema(p) {
       disbursed_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Migration: add columns to pre-existing disbursement table that may be missing
-    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS reference VARCHAR(50);
-    ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount    NUMERIC(15,2);
-    DO $$ BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'disbursement' AND column_name = 'disbursed_amount'
-      ) THEN
-        ALTER TABLE disbursement ALTER COLUMN disbursed_amount DROP NOT NULL;
-      END IF;
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'disbursement' AND column_name = 'disbursement_reference'
-      ) THEN
-        ALTER TABLE disbursement ALTER COLUMN disbursement_reference DROP NOT NULL;
-      END IF;
-    END $$;
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_reference_key' AND conrelid='disbursement'::regclass) THEN
-        ALTER TABLE disbursement ADD CONSTRAINT disbursement_reference_key UNIQUE (reference);
-      END IF;
-    END $$;
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_application_id_key' AND conrelid='disbursement'::regclass) THEN
-        ALTER TABLE disbursement ADD CONSTRAINT disbursement_application_id_key UNIQUE (application_id);
-      END IF;
-    END $$;
-
     CREATE TABLE IF NOT EXISTS application_history (
       history_id    BIGSERIAL PRIMARY KEY,
       application_id BIGINT NOT NULL REFERENCES loan_application(application_id) ON DELETE CASCADE,
@@ -391,12 +363,6 @@ async function ensureSchema(p) {
       CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type)
     );
 
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_system_alerts_app_type' AND conrelid='system_alerts'::regclass) THEN
-        ALTER TABLE system_alerts ADD CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type);
-      END IF;
-    END $$;
-
     CREATE TABLE IF NOT EXISTS utility_run (
       run_id                 BIGSERIAL PRIMARY KEY,
       utility_name           VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR',
@@ -407,14 +373,6 @@ async function ensureSchema(p) {
       alerts_created         INT NOT NULL DEFAULT 0,
       error_message          TEXT
     );
-
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS utility_name           VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR';
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS started_at             TIMESTAMP WITH TIME ZONE;
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS completed_at           TIMESTAMP WITH TIME ZONE;
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS result                 VARCHAR(30);
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS applications_processed INT NOT NULL DEFAULT 0;
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS alerts_created         INT NOT NULL DEFAULT 0;
-    ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS error_message          TEXT;
 
     CREATE TABLE IF NOT EXISTS ng_core_banking (
       core_id          BIGSERIAL PRIMARY KEY,
@@ -430,39 +388,6 @@ async function ensureSchema(p) {
       synced_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Migration: add missing columns / drop legacy NOT NULL on pre-existing ng_core_banking table
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_id      VARCHAR(15);
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_name    VARCHAR(100);
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS address          TEXT;
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS dob              DATE;
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS kyc_details      TEXT;
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS approved_amount  NUMERIC(15,2);
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_amount NUMERIC(15,2);
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_date   DATE;
-    ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS synced_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
-    DO $$
-    DECLARE
-      col RECORD;
-    BEGIN
-      FOR col IN
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'ng_core_banking'
-          AND is_nullable = 'NO'
-          AND column_name NOT IN ('core_id', 'id', 'application_id', 'customer_id', 'customer_name', 'address', 'dob', 'kyc_details', 'approved_amount', 'disbursed_amount', 'disbursed_date', 'synced_at')
-      LOOP
-        EXECUTE format('ALTER TABLE ng_core_banking ALTER COLUMN %I DROP NOT NULL', col.column_name);
-      END LOOP;
-    END $$;
-
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ng_core_banking_application_id_key' AND conrelid='ng_core_banking'::regclass) THEN
-        ALTER TABLE ng_core_banking ADD CONSTRAINT ng_core_banking_application_id_key UNIQUE (application_id);
-      END IF;
-    END $$;
-
     CREATE TABLE IF NOT EXISTS app_user (
       user_id     BIGSERIAL PRIMARY KEY,
       username    VARCHAR(50) UNIQUE NOT NULL,
@@ -472,21 +397,87 @@ async function ensureSchema(p) {
       branch_code VARCHAR(20) DEFAULT 'BR001',
       created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-
-    INSERT INTO app_user (username, full_name, role, email, branch_code) VALUES
+  `;
+  const migrations = [
+    `ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS reference VARCHAR(50);`,
+    `ALTER TABLE disbursement ADD COLUMN IF NOT EXISTS amount NUMERIC(15,2);`,
+    `DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='disbursement' AND column_name='disbursed_amount') THEN
+        ALTER TABLE disbursement ALTER COLUMN disbursed_amount DROP NOT NULL;
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='disbursement' AND column_name='disbursement_reference') THEN
+        ALTER TABLE disbursement ALTER COLUMN disbursement_reference DROP NOT NULL;
+      END IF;
+    END $$;`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_reference_key' AND conrelid='disbursement'::regclass) THEN
+        ALTER TABLE disbursement ADD CONSTRAINT disbursement_reference_key UNIQUE (reference);
+      END IF;
+    END $$;`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='disbursement_application_id_key' AND conrelid='disbursement'::regclass) THEN
+        ALTER TABLE disbursement ADD CONSTRAINT disbursement_application_id_key UNIQUE (application_id);
+      END IF;
+    END $$;`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS utility_name VARCHAR(50) NOT NULL DEFAULT 'OVERDUE_MONITOR';`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE;`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE;`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS result VARCHAR(30);`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS applications_processed INT NOT NULL DEFAULT 0;`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS alerts_created INT NOT NULL DEFAULT 0;`,
+    `ALTER TABLE utility_run ADD COLUMN IF NOT EXISTS error_message TEXT;`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_id VARCHAR(15);`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS customer_name VARCHAR(100);`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS address TEXT;`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS dob DATE;`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS kyc_details TEXT;`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(15,2);`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_amount NUMERIC(15,2);`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS disbursed_date DATE;`,
+    `ALTER TABLE ng_core_banking ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+    `DO $$
+    DECLARE col RECORD;
+    BEGIN
+      FOR col IN
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'ng_core_banking' AND is_nullable = 'NO'
+          AND column_name NOT IN ('core_id','id','application_id','customer_id','customer_name','address','dob','kyc_details','approved_amount','disbursed_amount','disbursed_date','synced_at')
+      LOOP
+        EXECUTE format('ALTER TABLE ng_core_banking ALTER COLUMN %I DROP NOT NULL', col.column_name);
+      END LOOP;
+    END $$;`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ng_core_banking_application_id_key' AND conrelid='ng_core_banking'::regclass) THEN
+        ALTER TABLE ng_core_banking ADD CONSTRAINT ng_core_banking_application_id_key UNIQUE (application_id);
+      END IF;
+    END $$;`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_system_alerts_app_type' AND conrelid='system_alerts'::regclass) THEN
+        ALTER TABLE system_alerts ADD CONSTRAINT uq_system_alerts_app_type UNIQUE (application_id, alert_type);
+      END IF;
+    END $$;`,
+    `INSERT INTO app_user (username, full_name, role, email, branch_code) VALUES
       ('officer_ramesh', 'Ramesh Sharma',       'LOAN_OFFICER',         'ramesh@losbank.in', 'BR001'),
       ('credit_priya',   'Priya Iyer',           'CREDIT_OFFICER',       'priya@losbank.in',  'BR001'),
       ('treasury_amit',  'Amit Patel',           'DISBURSEMENT_OFFICER', 'amit@losbank.in',   'BR001'),
       ('admin_super',    'Rajesh Gupta (Admin)', 'ADMIN',                'admin@losbank.in',  'HQ001'),
       ('auditor_neha',   'Neha Kulkarni',        'AUDITOR',              'neha@losbank.in',   'AUDIT01')
-    ON CONFLICT (username) DO NOTHING;
-  `;
+    ON CONFLICT (username) DO NOTHING;`
+  ];
+
   try {
     await p.query(ddl);
-    schemaInitialized = true;
   } catch (err) {
     console.error('[Schema Init Warning]', err.message);
   }
+  for (const m of migrations) {
+    try {
+      await p.query(m);
+    } catch (err) {
+      console.error('[Migration Warning]', err.message);
+    }
+  }
+  schemaInitialized = true;
 }
 
 // ===========================================================================
@@ -1279,12 +1270,17 @@ export default async function handler(req, res) {
 
       let alertsCreated = 0;
       for (const row of overdueApps.rows) {
-        const inserted = await client.query(`
-          INSERT INTO system_alerts (application_id, alert_type, created_at)
-          VALUES ($1, 'REVIEW_OVERDUE', NOW())
-          ON CONFLICT ON CONSTRAINT uq_system_alerts_app_type DO NOTHING;
-        `, [row.application_id]);
-        if (inserted.rowCount > 0) alertsCreated++;
+        const existsRes = await client.query(
+          `SELECT 1 FROM system_alerts WHERE application_id=$1 AND alert_type='REVIEW_OVERDUE';`,
+          [row.application_id]
+        );
+        if (existsRes.rows.length === 0) {
+          await client.query(
+            `INSERT INTO system_alerts (application_id, alert_type, created_at) VALUES ($1, 'REVIEW_OVERDUE', NOW());`,
+            [row.application_id]
+          );
+          alertsCreated++;
+        }
       }
 
       // --- Core banking push: DISBURSED → ng_core_banking → EXIT ---
@@ -1307,8 +1303,7 @@ export default async function handler(req, res) {
           INSERT INTO ng_core_banking
             (application_id, customer_id, customer_name, address, dob, kyc_details,
              approved_amount, disbursed_amount, disbursed_date, synced_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-          ON CONFLICT (application_id) DO NOTHING;
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW());
         `, [
           row.application_id, row.customer_id, row.customer_name, row.address,
           row.date_of_birth instanceof Date ? row.date_of_birth.toISOString().split('T')[0] : row.date_of_birth,
