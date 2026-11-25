@@ -1221,7 +1221,6 @@ export default async function handler(req, res) {
     const client = await p.connect();
     try {
       await client.query('BEGIN');
-      const businessDate = SUPABASE_CONFIG.businessDate;
 
       // --- Overdue monitor: flag UNDER_REVIEW apps older than OVERDUE_DAYS ---
       const overdueApps = await client.query(`
@@ -1307,7 +1306,8 @@ export default async function handler(req, res) {
   // =========================================================================
   if (pathname === '/api/utilities/csv' && method === 'GET') {
     try {
-      const businessDate = SUPABASE_CONFIG.businessDate;
+      const qDate = query.get('businessDate');
+      const csvBusinessDate = (qDate && /^\d{4}-\d{2}-\d{2}$/.test(qDate)) ? qDate : businessDate;
       const r = await p.query(`
         SELECT a.application_number, c.name AS customer_name, a.customer_id, a.product,
                a.branch_code, a.requested_amount, a.submitted_at,
@@ -1316,9 +1316,9 @@ export default async function handler(req, res) {
         LEFT JOIN customer c ON a.customer_id = c.customer_id
         WHERE a.status = 'UNDER_REVIEW' AND a.submitted_at IS NOT NULL
         ORDER BY a.submitted_at ASC;
-      `, [businessDate]);
+      `, [csvBusinessDate]);
 
-      const dateStr = businessDate.replace(/-/g, '');
+      const dateStr = csvBusinessDate.replace(/-/g, '');
       const csvRows = ['ApplicationNumber,CustomerName,CustomerID,Product,BranchCode,RequestedAmount,SubmittedAt,DaysWaiting,OverdueFlag'];
       r.rows.forEach(a => {
         const sDate    = a.submitted_at instanceof Date ? a.submitted_at.toISOString().split('T')[0] : (a.submitted_at || '');
